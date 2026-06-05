@@ -1,0 +1,171 @@
+# ==============================
+# Project-specific
+# ==============================
+VDT_Textsum/
+data/
+logs/
+models/
+test/
+outputs/
+checkpoints/
+runs/
+wandb/
+
+# ==============================
+# Environment & secrets
+# ==============================
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+secrets/
+
+# ==============================
+# Python
+# ==============================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# ==============================
+# Virtual environments
+# ==============================
+venv/
+env/
+ENV/
+.venv/
+.env/
+virtualenv/
+.python-version
+pip-log.txt
+pip-delete-this-directory.txt
+
+# ==============================
+# Testing & coverage
+# ==============================
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+htmlcov/
+
+# ==============================
+# Jupyter / IPython
+# ==============================
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+profile_default/
+ipython_config.py
+
+# ==============================
+# Type checkers & linters
+# ==============================
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+.ruff_cache/
+
+# ==============================
+# ML / DL artifacts
+# ==============================
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.bin
+*.onnx
+*.h5
+*.pkl
+*.pickle
+*.joblib
+*.npy
+*.npz
+*.tfrecord
+
+# ==============================
+# Datasets (large files)
+# ==============================
+*.jsonl
+*.parquet
+*.arrow
+*.feather
+*.csv
+*.tsv
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.7z
+*.rar
+
+# ==============================
+# Hugging Face cache
+# ==============================
+.cache/
+huggingface/
+transformers_cache/
+
+# ==============================
+# Logs & monitoring
+# ==============================
+*.log
+*.out
+*.err
+tensorboard/
+mlruns/
+lightning_logs/
+
+# ==============================
+# IDE / Editor
+# ==============================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+*.sublime-project
+*.sublime-workspace
+
+# ==============================
+# OS
+# ==============================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
