@@ -48,18 +48,10 @@ logger = logging.getLogger(__name__)
 # ==============================================================================
 
 def load_jsonl(path: str) -> HFDataset:
-    """Load SFT data from JSONL (each line = chat-format dict)."""
+    """Load SFT data from JSONL (each line = chat-format dict with 'messages' key)."""
     if not os.path.isfile(path):
         raise FileNotFoundError(f"Data file not found: {path}")
     return load_dataset("json", data_files=path, split="train")
-
-
-def format_chat_for_model(example: dict, tokenizer) -> str:
-    """Convert chat messages dict to tokenizer's chat template string."""
-    messages = example["messages"]
-    return tokenizer.apply_chat_template(
-        messages, tokenize=False, add_generation_prompt=False
-    )
 
 
 # ==============================================================================
@@ -148,11 +140,10 @@ def train(cfg: SFTConfig, resume_from: Optional[str] = None):
     model = load_model(cfg.model)
     lora_config = get_lora_config(cfg.model)
 
-    # 3. Packing collator — sequences are packed to max_seq_length
-    def formatting_func(example):
-        return format_chat_for_model(example, tokenizer)
-
     # 4. Configure TRL SFT
+    # Note: assistant_only_loss=True enables prompt masking — SFTTrainer
+    # automatically applies chat template and masks non-assistant tokens.
+    # The dataset must have a "messages" column (conversational format).
     training_args = TRLSFTConfig(
         output_dir=cfg.output_dir,
         per_device_train_batch_size=cfg.per_device_train_batch_size,
@@ -173,11 +164,12 @@ def train(cfg: SFTConfig, resume_from: Optional[str] = None):
         eval_steps=cfg.eval_steps if cfg.eval_strategy == "steps" else None,
         max_length=cfg.max_seq_length,
         packing=cfg.packing,
-        dataset_text_field=None,  # We use formatting_func
+        dataset_text_field=None,  # Uses "messages" column from dataset
         report_to=cfg.report_to,
         run_name=cfg.run_name or f"sft_qwen3b_{cfg.num_train_epochs}ep",
         remove_unused_columns=False,
         neftune_noise_alpha=cfg.neftune_noise_alpha,
+        assistant_only_loss=True,  # Mask prompt tokens — only compute loss on assistant responses
         ddp_find_unused_parameters=False if torch.cuda.device_count() > 1 else None,
     )
 
@@ -189,7 +181,6 @@ def train(cfg: SFTConfig, resume_from: Optional[str] = None):
         eval_dataset=val_dataset,
         processing_class=tokenizer,
         peft_config=lora_config,
-        formatting_func=formatting_func,
     )
 
     # 6. Optionally resume

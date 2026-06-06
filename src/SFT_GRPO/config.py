@@ -32,13 +32,14 @@ class ModelConfig:
     """Double quantization for memory efficiency."""
 
     lora_r: int = 32
-    """LoRA rank."""
+    """LoRA rank. 32 = good capacity for summarization."""
 
-    lora_alpha: int = 64
-    """LoRA alpha scaling."""
+    lora_alpha: int = 32
+    """LoRA alpha scaling. Set = r for stable training (scaling factor = 1)."""
 
     lora_dropout: float = 0.05
-    """LoRA dropout."""
+    """LoRA dropout. 0.05 provides light regularization."""
+
 
     lora_target_modules: List[str] = field(
         default_factory=lambda: [
@@ -79,9 +80,11 @@ class SFTConfig:
     (GLIBC 2.31). Packing without flash attention may cause cross-contamination
     between samples."""
 
-    learning_rate: float = 2e-4
+    learning_rate: float = 5e-5
+    """Lower LR for LoRA stability. QLoRA/FP16 LoRA needs 5e-5 or lower."""
     lr_scheduler_type: str = "cosine"
-    warmup_ratio: float = 0.03
+    warmup_ratio: float = 0.1
+    """Longer warmup — let model adapt gradually to avoid divergence."""
     num_train_epochs: float = 1.0
 
     # Optimizations
