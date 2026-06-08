@@ -5,8 +5,8 @@ SFT (Supervised Fine-Tuning) for Vietnamese text summarization.
 Trains Qwen2.5-3B-Instruct with QLoRA on length/style-augmented instruction data.
 
 Usage:
-    python src/SFT+GRPO/train_sft.py                         # train from scratch
-    python src/SFT+GRPO/train_sft.py --resume models/sft_lora/checkpoint-500
+    python src/SFT_GRPO/train_sft.py                         # train from scratch
+    python src/SFT_GRPO/train_sft.py --resume models/sft_lora/checkpoint-500
 """
 
 from __future__ import annotations
@@ -17,11 +17,13 @@ import os
 import sys
 from typing import Optional
 
-# Reduce CUDA memory fragmentation on Tesla T4
+# Reduce CUDA memory fragmentation (helps all NVIDIA GPUs)
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 import torch
 from datasets import Dataset as HFDataset, load_dataset
+import importlib.util
+
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
@@ -35,6 +37,7 @@ from peft import LoraConfig
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from SFT_GRPO.config import SFTConfig, ModelConfig
+from SFT_GRPO.metrics_logger import MetricsTracker, MetricsCallback
 
 logging.basicConfig(
     level=logging.INFO,
@@ -74,7 +77,7 @@ def load_tokenizer(model_cfg: ModelConfig):
 
 
 def load_model(model_cfg: ModelConfig, device_map: str = "auto"):
-    """Load model with optional QLoRA 4-bit or pure FP16."""
+    """Load model with optional QLoRA 4-bit or pure FP16/bf16."""
     if model_cfg.load_in_4bit:
         bnb_config = BitsAndBytesConfig(
             load_in_4bit=True,
@@ -85,10 +88,17 @@ def load_model(model_cfg: ModelConfig, device_map: str = "auto"):
     else:
         bnb_config = None
 
-    torch_dtype = (
-        getattr(torch, model_cfg.bnb_4bit_compute_dtype) if model_cfg.load_in_4bit
-        else torch.float16  # native FP16 on T4
-    )
+    # Use model_cfg.bnb_4bit_compute_dtype as the overall compute dtype hint
+    torch_dtype = getattr(torch, model_cfg.bnb_4bit_compute_dtype)
+
+    # Auto-detect flash-attention; fall back to PyTorch SDPA if not installed
+    _flash_attn_available = importlib.util.find_spec("flash_attn") is not None
+    attn_impl = "flash_attention_2" if _flash_attn_available else "sdpa"
+    if not _flash_attn_available:
+        logger.warning(
+            "flash-attn not found — falling back to sdpa attention. "
+            "Install with: pip install flash-attn --no-build-isolation"
+        )
 
     model = AutoModelForCausalLM.from_pretrained(
         model_cfg.model_name_or_path,
@@ -96,6 +106,7 @@ def load_model(model_cfg: ModelConfig, device_map: str = "auto"):
         device_map=device_map,
         trust_remote_code=True,
         torch_dtype=torch_dtype,
+        attn_implementation=attn_impl,
     )
     model.config.use_cache = False  # required for gradient checkpointing
     model.config.pretraining_tp = 1
@@ -140,10 +151,9 @@ def train(cfg: SFTConfig, resume_from: Optional[str] = None):
     model = load_model(cfg.model)
     lora_config = get_lora_config(cfg.model)
 
-    # 4. Configure TRL SFT
-    # Note: assistant_only_loss=True enables prompt masking — SFTTrainer
-    # automatically applies chat template and masks non-assistant tokens.
-    # The dataset must have a "messages" column (conversational format).
+    # 3. Configure TRL SFT
+    # TRL ≥0.12 auto-detects "messages" column and applies chat template +
+    # assistant-only loss masking when dataset_text_field=None.
     training_args = TRLSFTConfig(
         output_dir=cfg.output_dir,
         per_device_train_batch_size=cfg.per_device_train_batch_size,
@@ -162,18 +172,23 @@ def train(cfg: SFTConfig, resume_from: Optional[str] = None):
         save_total_limit=cfg.save_total_limit,
         eval_strategy=cfg.eval_strategy,
         eval_steps=cfg.eval_steps if cfg.eval_strategy == "steps" else None,
-        max_length=cfg.max_seq_length,
+        max_seq_length=cfg.max_seq_length,
         packing=cfg.packing,
-        dataset_text_field=None,  # Uses "messages" column from dataset
+        dataset_text_field=None,  # auto-detect "messages" column
         report_to=cfg.report_to,
         run_name=cfg.run_name or f"sft_qwen3b_{cfg.num_train_epochs}ep",
         remove_unused_columns=False,
         neftune_noise_alpha=cfg.neftune_noise_alpha,
-        assistant_only_loss=True,  # Mask prompt tokens — only compute loss on assistant responses
         ddp_find_unused_parameters=False if torch.cuda.device_count() > 1 else None,
+        dataloader_num_workers=cfg.dataloader_num_workers,
+        dataloader_pin_memory=True,
+        optim="adamw_torch_fused",
     )
 
-    # 5. Trainer
+    # 5. Metrics tracker (logs to output_dir/metrics/)
+    metrics_tracker = MetricsTracker(output_dir=cfg.output_dir)
+
+    # 6. Trainer with metrics callback
     trainer = SFTTrainer(
         model=model,
         args=training_args,
@@ -182,15 +197,19 @@ def train(cfg: SFTConfig, resume_from: Optional[str] = None):
         processing_class=tokenizer,
         peft_config=lora_config,
     )
+    trainer.add_callback(MetricsCallback(metrics_tracker))
 
-    # 6. Optionally resume
+    # 7. Save config snapshot
+    metrics_tracker.save_config({k: str(v) for k, v in cfg.__dict__.items()})
+
+    # 8. Optionally resume
     if resume_from:
         logger.info(f"Resuming from checkpoint: {resume_from}")
         trainer.train(resume_from_checkpoint=resume_from)
     else:
         trainer.train()
 
-    # 7. Save final
+    # 9. Save final
     final_path = os.path.join(cfg.output_dir, "final")
     trainer.save_model(final_path)
     logger.info(f"Model saved to {final_path}")
@@ -199,6 +218,12 @@ def train(cfg: SFTConfig, resume_from: Optional[str] = None):
     with open(os.path.join(final_path, "sft_config.json"), "w") as f:
         json.dump(cfg.__dict__, f, default=str, indent=2)
 
+    # Close metrics tracker
+    metrics_tracker.close()
+
+    # Print metrics file locations
+    logger.info(f"Training metrics:  {metrics_tracker._train_file_csv}")
+    logger.info(f"Evaluation metrics: {metrics_tracker._eval_file_csv}")
     logger.info("SFT training complete!")
 
 
@@ -215,7 +240,7 @@ if __name__ == "__main__":
     parser.add_argument("--data_root", type=str, default="VDT_Textsum")
     parser.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-3B-Instruct")
     parser.add_argument("--output_dir", type=str, default="models/sft_lora")
-    parser.add_argument("--lr", type=float, default=2e-4)
+    parser.add_argument("--lr", type=float, default=5e-5)
     parser.add_argument("--epochs", type=float, default=1.0)
     parser.add_argument("--batch_size", type=int, default=2)
     parser.add_argument("--max_seq_length", type=int, default=3072)

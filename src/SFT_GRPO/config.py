@@ -18,15 +18,13 @@ class ModelConfig:
     """HuggingFace model ID or local path."""
 
     load_in_4bit: bool = False
-    """Use FP16 LoRA instead of 4-bit QLoRA. Much faster on T4.
-    Set True only if VRAM < 12 GB."""
+    """Use FP16/bf16 LoRA instead of 4-bit QLoRA. Set True only if VRAM < 12 GB."""
 
     bnb_4bit_quant_type: str = "nf4"
     """4-bit quantization type: "nf4" or "fp4"."""
 
-    bnb_4bit_compute_dtype: str = "float16"
-    """Compute dtype for 4-bit base model. Use 'float16' for T4 (native),
-    'bfloat16' for Ampere+ GPUs (A100, RTX 3090/4090)."""
+    bnb_4bit_compute_dtype: str = "bfloat16"
+    """Compute dtype. Use 'bfloat16' for A100/H200 (native), 'float16' for V100/T4."""
 
     bnb_4bit_use_double_quant: bool = True
     """Double quantization for memory efficiency."""
@@ -65,46 +63,49 @@ class SFTConfig:
     val_data_path: str = "data/sft_val.jsonl"
 
     # Training
-    per_device_train_batch_size: int = 1
-    """Reduced from 2 to fit Tesla T4 16 GB memory."""
-    per_device_eval_batch_size: int = 2
-    """Reduced from 4 to fit eval on T4."""
-    gradient_accumulation_steps: int = 16
-    """Effective batch size = 1 * 16 = 16 with 1 GPU."""
+    per_device_train_batch_size: int = 20
+    """Per-device batch size. H200 141GB + flash_attn → 20; A100 80GB → 8; V100 32GB → 2."""
+    per_device_eval_batch_size: int = 16
+    gradient_accumulation_steps: int = 1
+    """Effective batch size = per_device_train_batch_size * grad_accum.
+    H200: 20 × 1 = 20. A100-80G: 8 × 2 = 16. V100: 2 × 4 = 8."""
 
-    max_seq_length: int = 2048
-    """Reduced from 3072 to fit T4 memory. Covers 8000-char source ~2000 tokens."""
+    max_seq_length: int = 3072
+    """Covers 99.7% of samples without truncation. Lower to 2048 for V100."""
 
-    packing: bool = False
-    """Disabled because flash-attention is not available on this system
-    (GLIBC 2.31). Packing without flash attention may cause cross-contamination
-    between samples."""
+    packing: bool = True
+    """Requires flash-attention v2+. Enabled for H200 (improves throughput ~1.5x)."""
 
     learning_rate: float = 5e-5
     """Lower LR for LoRA stability. QLoRA/FP16 LoRA needs 5e-5 or lower."""
     lr_scheduler_type: str = "cosine"
     warmup_ratio: float = 0.1
     """Longer warmup — let model adapt gradually to avoid divergence."""
-    num_train_epochs: float = 1.0
+    num_train_epochs: float = 2.0
+    """H200 24h: 2 epochs ≈ 10–16h for 358K samples. A100 24h: 1 epoch."""
 
     # Optimizations
-    bf16: bool = False
-    fp16: bool = True
-    # T4 has native FP16 Tensor Cores; bf16 is emulated and 3-5x slower
-    gradient_checkpointing: bool = True
+    bf16: bool = True
+    fp16: bool = False
+    # A100/H200: use bf16 (native). V100/T4: switch to fp16 (native).
+    gradient_checkpointing: bool = False
+    # H200 141GB: 3B model + LoRA + batch=20 uses ~40-60GB — no need for checkpointing.
+    # Set True for A100 40GB or V100 to save memory at cost of ~35% step time.
     gradient_checkpointing_kwargs: dict = field(
         default_factory=lambda: {"use_reentrant": False}
     )
+    dataloader_num_workers: int = 4
+    """Parallel data loading workers. H200 nodes have large CPU — 4 is safe."""
 
     # LoRA specifics
     neftune_noise_alpha: Optional[float] = None
     """Optional — NEFTune noise for better generalization."""
 
     # Logging & saving
-    logging_steps: int = 10
-    save_steps: int = 500
+    logging_steps: int = 5
+    save_steps: int = 200
     save_total_limit: int = 3
-    eval_steps: int = 200
+    eval_steps: int = 100
     eval_strategy: str = "steps"
     output_dir: str = "models/sft_lora"
     run_name: Optional[str] = None
@@ -150,6 +151,12 @@ class GRPOConfig:
     max_new_tokens: int = 256
     """Max tokens per generated completion."""
 
+    max_seq_length: int = 3072
+    """Total context length. H200: 3072. A100-40G: 2048. max_new_tokens must be < max_seq_length."""
+
+    do_sample: bool = True
+    """Use sampling for rollout generation. Set False for greedy (useful for smoke tests)."""
+
     top_p: float = 0.9
     """Top-p sampling for rollout."""
 
@@ -161,11 +168,13 @@ class GRPOConfig:
     """KL penalty coefficient."""
 
     # Training
-    per_device_train_batch_size: int = 2
-    """Number of prompts per device. Each generates K=4 completions."""
+    per_device_train_batch_size: int = 12
+    """Number of prompts per device. Each generates K completions.
+    H200 141GB + flash_attn → 12; A100 80GB → 4; A100 40GB → 2."""
 
-    gradient_accumulation_steps: int = 4
-    """Effective prompts per update = 2 * 4 = 8."""
+    gradient_accumulation_steps: int = 1
+    """Effective prompts per update = batch_size * grad_accum.
+    H200: 12 × 1 = 12. A100-80G: 4 × 2 = 8."""
 
     learning_rate: float = 5e-7
     """Low LR — GRPO is sensitive to large updates."""
@@ -175,10 +184,14 @@ class GRPOConfig:
 
     bf16: bool = True
     fp16: bool = False
-    gradient_checkpointing: bool = True
+    gradient_checkpointing: bool = False
+    # H200: policy (3B) + ref (3B) + rollouts fit in 141GB without checkpointing.
+    # Set True for A100 40GB.
     gradient_checkpointing_kwargs: dict = field(
         default_factory=lambda: {"use_reentrant": False}
     )
+    dataloader_num_workers: int = 4
+    """Parallel data loading workers."""
 
     # Reward weights
     reward_weight_accuracy: float = 0.5

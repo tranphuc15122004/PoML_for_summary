@@ -1,0 +1,301 @@
+#!/bin/bash
+#PBS -N poml_debug_pipeline
+#PBS -q dgxa100
+#PBS -l ncpus=16,ngpus=1,mem=64gb
+#PBS -l walltime=4:00:00
+#PBS -P hn98
+#PBS -l storage=scratch/jp09+gdata/hn98
+#PBS -o /scratch/jp09/dd9648/PoML_for_summary/logs/debug_%j.out
+#PBS -e /scratch/jp09/dd9648/PoML_for_summary/logs/debug_%j.err
+#PBS -j oe
+#PBS -m n
+
+# ==============================================================================
+# PoML for Summary - DEBUG FULL PIPELINE
+# ==============================================================================
+# Mục đích: Debug toàn bộ quy trình train (Data → SFT → GRPO → Eval)
+# Với verbose output, error handling, và kiểm tra từng bước
+# ==============================================================================
+
+set -euo pipefail
+# Tắt errexit ở một số chỗ để debug không bị dừng
+debug_cmd() {
+    echo ""
+    echo "═══════════════════════════════════════════════════════════════"
+    echo ">>> [DEBUG] Running: $*"
+    echo "═══════════════════════════════════════════════════════════════"
+    "$@" 2>&1
+    local ret=$?
+    if [ $ret -ne 0 ]; then
+        echo "⚠️  [WARN] Command exited with code $ret (continuing...)"
+    else
+        echo "✅ [OK] Command completed successfully"
+    fi
+    echo ""
+    return $ret
+}
+
+PROJECT_ROOT="/scratch/jp09/dd9648/PoML_for_summary"
+VENV_PATH="${PROJECT_ROOT}/.venv"
+SRC_PATH="${PROJECT_ROOT}/src"
+LOGS_DIR="${PROJECT_ROOT}/logs"
+DATA_DIR="${PROJECT_ROOT}/data"
+MODELS_DIR="${PROJECT_ROOT}/models"
+
+# Auto-detect GPU model
+GPU_NAME=""
+if command -v nvidia-smi &> /dev/null; then
+    GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)
+fi
+
+if [[ "${GPU_NAME}" == *"H100"* || "${GPU_NAME}" == *"H200"* ]]; then
+    GPU_MODEL="h200"
+elif [[ "${GPU_NAME}" == *"A100"* ]]; then
+    GPU_MODEL="a100"
+elif [[ "${GPU_NAME}" == *"V100"* ]]; then
+    GPU_MODEL="v100"
+else
+    GPU_MODEL="a100"
+fi
+
+case "${GPU_MODEL}" in
+    a100|h200)
+        DTYPE="bf16"
+        MAX_SEQ_LEN=2048   # Giảm xuống để debug nhanh hơn
+        PACKING="False"
+        SFT_BATCH=4
+        GRPO_BATCH=4
+        MAX_TRAIN_SAMPLES=1000  # Giới hạn samples để debug nhanh
+        MAX_GRPO_SAMPLES=200
+        ;;
+    v100)
+        DTYPE="fp16"
+        MAX_SEQ_LEN=1024
+        PACKING="False"
+        SFT_BATCH=2
+        GRPO_BATCH=2
+        MAX_TRAIN_SAMPLES=500
+        MAX_GRPO_SAMPLES=100
+        ;;
+esac
+
+mkdir -p "${LOGS_DIR}" "${DATA_DIR}" "${MODELS_DIR}"
+cd "${PROJECT_ROOT}"
+
+# ==============================================================================
+# 0. SYSTEM INFO
+# ==============================================================================
+echo "=============================================================="
+echo "DEBUG PIPELINE - PoML for Summary"
+echo "Job ID: ${PBS_JOBID:-local}"
+echo "Node: $(hostname)"
+echo "Date: $(date)"
+echo "=============================================================="
+
+debug_cmd nvidia-smi 2>&1 || echo "No nvidia-smi"
+debug_cmd nvcc --version 2>&1 || echo "No nvcc"
+echo "GPU_NAME: ${GPU_NAME}"
+echo "GPU_MODEL: ${GPU_MODEL}"
+echo "DTYPE: ${DTYPE}"
+echo "MAX_SEQ_LEN: ${MAX_SEQ_LEN}"
+echo "SFT_BATCH: ${SFT_BATCH}"
+
+echo ""
+echo "=== Python environment ==="
+source "${VENV_PATH}/bin/activate"
+export PYTHONPATH="${SRC_PATH}:${PYTHONPATH}"
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export CUDA_LAUNCH_BLOCKING=1
+export TORCH_USE_CUDA_DSA=1
+
+python --version
+pip list 2>/dev/null | grep -iE "torch|transformers|trl|peft|accelerate|bitsandbytes|datasets"
+python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}, Device count: {torch.cuda.device_count()}')"
+
+# ==============================================================================
+# 1. DATA PREPARATION
+# ==============================================================================
+echo ""
+echo "=============================================================="
+echo "STEP 1/4: Data Preparation"
+echo "=============================================================="
+
+echo "--- 1a. Length Profiler ---"
+debug_cmd python src/dataset/length_profiler.py \
+    --output_dir "${DATA_DIR}/profiling" 2>&1 || {
+    echo "⚠️  length_profiler failed, checking error..."
+    python -c "
+import sys
+sys.path.insert(0, '${SRC_PATH}')
+from dataset.length_profiler import compute_word_counts, compute_stats
+print('Import OK - compute_word_counts and compute_stats available')
+"
+}
+
+echo ""
+echo "--- 1b. Augmenter (generate SFT + GRPO data) ---"
+debug_cmd python src/dataset/augmenter.py \
+    --output_dir "${DATA_DIR}" \
+    --max_train_samples "${MAX_TRAIN_SAMPLES}" \
+    --max_val_samples 100 \
+    --max_test_samples 100 2>&1 || {
+    echo "⚠️  augmenter failed, checking generated files..."
+}
+
+echo ""
+echo "=== Check data files ==="
+ls -la "${DATA_DIR}/" 2>/dev/null || echo "No data dir"
+if [ -f "${DATA_DIR}/sft_train.jsonl" ]; then
+    echo "sft_train.jsonl: $(wc -l < ${DATA_DIR}/sft_train.jsonl) lines"
+    head -1 "${DATA_DIR}/sft_train.jsonl" | python -m json.tool 2>/dev/null | head -20 || echo "Raw: $(head -c 200 ${DATA_DIR}/sft_train.jsonl)"
+fi
+if [ -f "${DATA_DIR}/grpo_train.jsonl" ]; then
+    echo "grpo_train.jsonl: $(wc -l < ${DATA_DIR}/grpo_train.jsonl) lines"
+fi
+
+# ==============================================================================
+# 2. SFT TRAINING
+# ==============================================================================
+echo ""
+echo "=============================================================="
+echo "STEP 2/4: SFT Training"
+echo "=============================================================="
+
+echo "--- 2a. Check model download ---"
+debug_cmd python -c "
+from transformers import AutoTokenizer
+tok = AutoTokenizer.from_pretrained('Qwen/Qwen2.5-3B-Instruct', trust_remote_code=True)
+print(f'Tokenizer loaded: {tok.__class__.__name__}, vocab_size={len(tok)}')
+" 2>&1 || echo "⚠️ Cannot download model - check internet/proxy"
+
+echo ""
+echo "--- 2b. Run SFT training (debug mode) ---"
+debug_cmd python launch_sft.py \
+    --max_seq_length "${MAX_SEQ_LEN}" \
+    --packing "${PACKING}" \
+    --per_device_train_batch_size "${SFT_BATCH}" \
+    --per_device_eval_batch_size 2 \
+    --gradient_accumulation_steps 2 \
+    --bf16 "$([ "${DTYPE}" = "bf16" ] && echo True || echo False)" \
+    --fp16 "$([ "${DTYPE}" = "fp16" ] && echo True || echo False)" \
+    --learning_rate 5e-5 \
+    --warmup_ratio 0.1 \
+    --lr_scheduler_type "cosine" \
+    --num_train_epochs 1.0 \
+    --logging_steps 1 \
+    --save_steps 500 \
+    --eval_strategy "no" \
+    --output_dir "${MODELS_DIR}/sft_lora_debug" \
+    --report_to "none" \
+    --max_steps 50 2>&1 || {
+    echo "❌ SFT training failed!"
+    echo "--- Checking CUDA memory ---"
+    python -c "
+import torch; print(f'CUDA available: {torch.cuda.is_available()}')
+if torch.cuda.is_available():
+    print(f'Device: {torch.cuda.get_device_name()}')
+    print(f'Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB')
+"
+}
+
+echo ""
+echo "--- 2c. Check SFT outputs ---"
+ls -la "${MODELS_DIR}/sft_lora_debug/" 2>/dev/null || echo "No SFT output dir"
+
+# ==============================================================================
+# 3. GRPO TRAINING
+# ==============================================================================
+echo ""
+echo "=============================================================="
+echo "STEP 3/4: GRPO Training"
+echo "=============================================================="
+
+echo "--- 3a. Check GRPO data ---"
+if [ -f "${DATA_DIR}/grpo_train.jsonl" ]; then
+    echo "GRPO data OK: $(wc -l < ${DATA_DIR}/grpo_train.jsonl) samples"
+    
+    echo "--- 3b. Test rewards ---"
+    debug_cmd python -c "
+import sys; sys.path.insert(0, '${SRC_PATH}')
+from SFT_GRPO.rewards import compute_all_rewards
+print('Rewards module loaded OK')
+# Test with dummy data
+test_gen = 'Đây là một bài tóm tắt ngắn gọn về văn bản.'
+test_ref = 'Đây là bài tóm tắt về văn bản.'
+test_meta = {'requested_length': 10, 'style': 'báo chí'}
+rewards = compute_all_rewards(test_gen, test_ref, test_meta)
+print(f'Test rewards: {rewards}')
+" 2>&1 || echo "⚠️ Rewards test failed"
+    
+    echo ""
+    echo "--- 3c. Run GRPO training (debug mode) ---"
+    debug_cmd python src/SFT_GRPO/train_grpo.py \
+        --data_path "${DATA_DIR}/grpo_train.jsonl" \
+        --val_data_path "${DATA_DIR}/grpo_val.jsonl" \
+        --max_steps 10 \
+        --per_device_train_batch_size "${GRPO_BATCH}" \
+        --gradient_accumulation_steps 2 \
+        --max_seq_length "${MAX_SEQ_LEN}" \
+        --num_generations 4 \
+        --bf16 "$([ "${DTYPE}" = "bf16" ] && echo True || echo False)" \
+        --fp16 "$([ "${DTYPE}" = "fp16" ] && echo True || echo False)" \
+        --output_dir "${MODELS_DIR}/grpo_debug" \
+        --logging_steps 1 \
+        --report_to "none" 2>&1 || {
+        echo "❌ GRPO training failed!"
+        echo "--- Checking error details ---"
+    }
+else
+    echo "⚠️ No GRPO data - skipping GRPO training"
+fi
+
+echo ""
+echo "--- 3d. Check GRPO outputs ---"
+ls -la "${MODELS_DIR}/grpo_debug/" 2>/dev/null || echo "No GRPO output dir"
+
+# ==============================================================================
+# 4. EVALUATION
+# ==============================================================================
+echo ""
+echo "=============================================================="
+echo "STEP 4/4: Evaluation"
+echo "=============================================================="
+
+echo "--- 4a. Check test data ---"
+if [ -f "${DATA_DIR}/test.jsonl" ]; then
+    echo "Test data: $(wc -l < ${DATA_DIR}/test.jsonl) samples"
+    echo "--- 4b. Run evaluation ---"
+    debug_cmd python src/SFT_GRPO/evaluate.py \
+        --test_data "${DATA_DIR}/test.jsonl" \
+        --output_dir "${MODELS_DIR}/eval_results" \
+        --max_samples 20 2>&1 || echo "⚠️ Evaluation failed"
+else
+    echo "⚠️ No test data - checking for any jsonl in data dir"
+    ls -la "${DATA_DIR}"/*.jsonl 2>/dev/null || echo "No jsonl files found"
+fi
+
+# ==============================================================================
+# SUMMARY
+# ==============================================================================
+echo ""
+echo "=============================================================="
+echo "DEBUG PIPELINE COMPLETE"
+echo "Job ID: ${PBS_JOBID:-local}"
+echo "Node: $(hostname)"
+echo "GPU: ${GPU_NAME}"
+echo "End time: $(date)"
+echo "=============================================================="
+echo ""
+echo "=== Output files ==="
+echo "Logs:    ${LOGS_DIR}/"
+echo "Data:    ${DATA_DIR}/"
+echo "Models:  ${MODELS_DIR}/"
+echo ""
+echo "=== Data files ==="
+ls -lh "${DATA_DIR}/" 2>/dev/null
+echo ""
+echo "=== Model files ==="
+ls -lh "${MODELS_DIR}/" 2>/dev/null
+echo ""
+echo "=== Final GPU memory ==="
+nvidia-smi --query-gpu=name,memory.used,memory.total --format=csv,noheader 2>/dev/null || true

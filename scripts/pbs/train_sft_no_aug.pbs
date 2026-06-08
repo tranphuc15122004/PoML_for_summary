@@ -1,0 +1,61 @@
+#!/bin/bash
+#PBS -N poml_sft_noaug
+#PBS -q gpuhopper
+#PBS -l ncpus=12,ngpus=1,mem=120gb
+#PBS -l walltime=24:00:00
+#PBS -P hn98
+#PBS -l storage=scratch/jp09+gdata/hn98
+#PBS -o /scratch/jp09/dd9648/PoML_for_summary/logs/sft_noaug_%j.out
+#PBS -e /scratch/jp09/dd9648/PoML_for_summary/logs/sft_noaug_%j.err
+#PBS -j oe
+
+# ==============================================================================
+# SFT — Non-augmented data (plain summarization, no length/style constraints)
+# H200 141GB | Flash Attention 2 | packing=True | gradient_checkpointing=False
+# Output: models/sft_no_aug/
+# Submit: qsub scripts/pbs/train_sft_no_aug.pbs
+# ==============================================================================
+
+set -euo pipefail
+
+PROJECT_ROOT="/scratch/jp09/dd9648/PoML_for_summary"
+VENV_PATH="${PROJECT_ROOT}/.venv"
+SRC_PATH="${PROJECT_ROOT}/src"
+LOGS_DIR="${PROJECT_ROOT}/logs"
+
+mkdir -p "${LOGS_DIR}"
+cd "${PROJECT_ROOT}"
+
+echo "=============================================================="
+echo "SFT Training — NON-AUGMENTED data"
+echo "Job ID:    ${PBS_JOBID}"
+echo "Node:      $(hostname)"
+echo "GPU:       $(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)"
+echo "Start:     $(date)"
+echo "=============================================================="
+
+source "${VENV_PATH}/bin/activate"
+export PYTHONPATH="${SRC_PATH}:${PYTHONPATH:-}"
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+export HF_DATASETS_CACHE="/scratch/jp09/dd9648/.cache/huggingface/datasets"
+mkdir -p "${HF_DATASETS_CACHE}"
+
+# Step 1: Generate non-augmented data if not already present
+if [ ! -f "${PROJECT_ROOT}/data/sft_train_no_aug.jsonl" ]; then
+    echo ">>> Generating non-augmented SFT data..."
+    python src/dataset/prepare_no_aug.py
+else
+    lines=$(wc -l < "${PROJECT_ROOT}/data/sft_train_no_aug.jsonl")
+    echo ">>> Non-augmented data found (${lines} lines) — skipping generation."
+fi
+
+# Step 2: Train
+echo ">>> Starting SFT (non-augmented)..."
+python launch_sft_no_aug.py
+
+echo "=============================================================="
+echo "SFT (non-augmented) complete. Model saved: models/sft_no_aug/"
+echo "End: $(date)"
+echo "=============================================================="

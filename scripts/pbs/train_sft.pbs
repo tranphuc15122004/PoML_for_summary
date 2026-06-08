@@ -1,0 +1,112 @@
+#!/bin/bash
+#PBS -N poml_sft_training
+#PBS -q gpuhopper
+#PBS -l ncpus=24,ngpus=1,mem=120gb
+#PBS -l walltime=24:00:00
+#PBS -P hn98
+#PBS -l storage=scratch/jp09+gdata/hn98
+#PBS -o /scratch/jp09/dd9648/PoML_for_summary/logs/sft_%j.out
+#PBS -e /scratch/jp09/dd9648/PoML_for_summary/logs/sft_%j.err
+#PBS -j oe
+
+# ==============================================================================
+# PoML for Summary - SFT Training Only
+# ==============================================================================
+# Usage:
+#   qsub train_sft.pbs
+#   qsub -v GPU_MODEL=v100 train_sft.pbs
+# ==============================================================================
+
+set -euo pipefail
+
+PROJECT_ROOT="/scratch/jp09/dd9648/PoML_for_summary"
+VENV_PATH="${PROJECT_ROOT}/.venv"
+SRC_PATH="${PROJECT_ROOT}/src"
+LOGS_DIR="${PROJECT_ROOT}/logs"
+# Auto-detect GPU from nvidia-smi if GPU_MODEL not set
+if [ -z "${GPU_MODEL:-}" ]; then
+    _GPU=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)
+    case "${_GPU}" in
+        *H200*|*Hopper*) GPU_MODEL="h200" ;;
+        *A100*)          GPU_MODEL="a100" ;;
+        *V100*)          GPU_MODEL="v100" ;;
+        *)               GPU_MODEL="a100" ;;
+    esac
+    echo "Auto-detected GPU_MODEL=${GPU_MODEL} from: ${_GPU}"
+fi
+
+case "${GPU_MODEL}" in
+    h200)
+        DTYPE="bf16"
+        MAX_SEQ_LEN=3072
+        PACKING="False"
+        SFT_BATCH=12
+        GRAD_ACCUM=2      # effective_batch=24
+        ;;
+    a100)
+        DTYPE="bf16"
+        MAX_SEQ_LEN=3072
+        PACKING="False"
+        SFT_BATCH=8
+        GRAD_ACCUM=2      # effective_batch=16
+        ;;
+    v100)
+        DTYPE="fp16"
+        MAX_SEQ_LEN=2048
+        PACKING="False"
+        SFT_BATCH=2
+        GRAD_ACCUM=4      # effective_batch=8
+        ;;
+    *)
+        DTYPE="bf16"
+        MAX_SEQ_LEN=3072
+        PACKING="False"
+        SFT_BATCH=12
+        GRAD_ACCUM=2
+        ;;
+esac
+
+mkdir -p "${LOGS_DIR}"
+cd "${PROJECT_ROOT}"
+
+echo "=============================================================="
+echo "SFT Training"
+echo "Job ID: ${PBS_JOBID}"
+echo "Node: $(hostname)"
+echo "GPU: $(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)"
+echo "GPU Model: ${GPU_MODEL}"
+echo "Dtype: ${DTYPE}"
+echo "Max Seq Length: ${MAX_SEQ_LEN}"
+echo "Batch Size: ${SFT_BATCH} (effective: $((SFT_BATCH * GRAD_ACCUM)))"
+echo "Start time: $(date)"
+echo "=============================================================="
+
+source "${VENV_PATH}/bin/activate"
+export PYTHONPATH="${SRC_PATH}:${PYTHONPATH}"
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+# Compute nodes have no internet access — use local model
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+export HF_DATASETS_CACHE="/scratch/jp09/dd9648/.cache/huggingface/datasets"
+LOCAL_MODEL="/g/data/hn98/dd9648/models/Qwen2.5-3B-Instruct"
+mkdir -p "${HF_DATASETS_CACHE}"
+
+# Write per-run config overrides (grad_accum varies by GPU)
+OVERRIDE_CFG="${LOGS_DIR}/sft_run_config.json"
+python -c "import json; print(json.dumps({'gradient_accumulation_steps': ${GRAD_ACCUM}}))" > "${OVERRIDE_CFG}"
+
+# SFT Training (using train_sft.py for full CLI arg support)
+python src/SFT_GRPO/train_sft.py \
+    --model_name "${LOCAL_MODEL}" \
+    --max_seq_length "${MAX_SEQ_LEN}" \
+    --batch_size "${SFT_BATCH}" \
+    --bf16 "$([ "${DTYPE}" = "bf16" ] && echo True || echo False)" \
+    --fp16 "$([ "${DTYPE}" = "fp16" ] && echo True || echo False)" \
+    --output_dir "models/sft_lora" \
+    --config "${OVERRIDE_CFG}"
+")
+
+echo "=============================================================="
+echo "SFT complete. Model saved to models/sft_lora/"
+echo "End time: $(date)"
+echo "=============================================================="

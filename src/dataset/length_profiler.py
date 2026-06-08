@@ -25,9 +25,11 @@ import numpy as np
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 _SRC_DIR = os.path.dirname(_THIS_DIR)          # src/
 _PROJECT_ROOT = os.path.dirname(_SRC_DIR)       # project root
+# Ensure src/ comes before script directory in sys.path for correct package resolution.
 for p in [_PROJECT_ROOT, _SRC_DIR]:
-    if p not in sys.path:
-        sys.path.insert(0, p)
+    while p in sys.path:
+        sys.path.remove(p)
+    sys.path.insert(0, p)
 
 from dataset.dataset import (
     DatasetConfig,

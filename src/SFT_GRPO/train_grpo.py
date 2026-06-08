@@ -37,6 +37,7 @@ from peft import LoraConfig, get_peft_model, PeftModel
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from SFT_GRPO.config import GRPOConfig, ModelConfig
+from SFT_GRPO.metrics_logger import MetricsTracker
 from SFT_GRPO.rewards import compute_all_rewards
 
 logging.basicConfig(
@@ -152,6 +153,13 @@ class GRPOTrainer:
         self.global_step = 0
         self.best_val_reward = -float("inf")
 
+        # Persistent metrics logging
+        if self.accelerator.is_main_process:
+            self.metrics_tracker = MetricsTracker(output_dir=cfg.output_dir)
+            self.metrics_tracker.save_config(cfg.__dict__)
+        else:
+            self.metrics_tracker = None
+
     # ------------------------------------------------------------------
     # Model loading
     # ------------------------------------------------------------------
@@ -170,6 +178,7 @@ class GRPOTrainer:
             device_map="auto",
             trust_remote_code=True,
             torch_dtype=getattr(torch, self.cfg.model.bnb_4bit_compute_dtype),
+            attn_implementation="flash_attention_2",
         )
         model.config.use_cache = False
         model.config.pretraining_tp = 1
@@ -229,9 +238,9 @@ class GRPOTrainer:
             **prompt_encodings,
             max_new_tokens=self.cfg.max_new_tokens,
             num_return_sequences=num_return_sequences,
-            temperature=self.cfg.temperature,
-            top_p=self.cfg.top_p,
-            do_sample=True,
+            temperature=self.cfg.temperature if self.cfg.do_sample else 1.0,
+            top_p=self.cfg.top_p if self.cfg.do_sample else 1.0,
+            do_sample=self.cfg.do_sample,
             pad_token_id=self.tokenizer.pad_token_id,
             eos_token_id=self.tokenizer.eos_token_id,
             return_dict_in_generate=True,
@@ -261,7 +270,7 @@ class GRPOTrainer:
                 seq_logprobs.append(token_log_prob)
             logprobs_list.append(seq_logprobs)
 
-        return output_ids.sequences, generated_texts, logprobs_list
+        return gen_ids, generated_texts, logprobs_list
 
     # ------------------------------------------------------------------
     # KL divergence computation
@@ -345,7 +354,8 @@ class GRPOTrainer:
 
         for i in range(len(old_logprobs)):
             old_lp = torch.tensor(old_logprobs[i], device=device)
-            new_lp = torch.tensor(new_logprobs[i], device=device)
+            # new_logprobs contains tensors (with grad) — stack to preserve gradient
+            new_lp = torch.stack(new_logprobs[i]) if isinstance(new_logprobs[i][0], torch.Tensor) else torch.tensor(new_logprobs[i], device=device)
             rho = torch.exp(new_lp - old_lp)  # importance ratio per token
             adv = advantages[i]
 
@@ -518,10 +528,9 @@ class GRPOTrainer:
         new_logprobs_list = []
         for seq_idx in range(gen_tokens.shape[0]):
             seq = gen_tokens[seq_idx]
-            seq_logprobs = []
-            for step_idx in range(len(seq)):
-                lp = log_probs[seq_idx, step_idx, seq[step_idx]].item()
-                seq_logprobs.append(lp)
+            # Keep as tensors (not .item()) so gradients flow through
+            seq_logprobs = [log_probs[seq_idx, step_idx, seq[step_idx]]
+                            for step_idx in range(len(seq))]
             new_logprobs_list.append(seq_logprobs)
 
         # KL divergence (reference vs policy)
@@ -540,6 +549,7 @@ class GRPOTrainer:
                 for step_idx in range(len(gen_tokens[seq_idx])):
                     r = ref_log_probs[seq_idx, step_idx, gen_tokens[seq_idx, step_idx]] - \
                         log_probs[seq_idx, step_idx, gen_tokens[seq_idx, step_idx]]
+                    r = torch.clamp(r, min=-20.0, max=20.0)  # prevent exp overflow
                     kl_sum += (torch.exp(r) - r - 1).item()
                     kl_count += 1
             kl_value = kl_sum / max(kl_count, 1)
@@ -648,6 +658,8 @@ class GRPOTrainer:
                 batch_size=self.cfg.per_device_train_batch_size,
                 shuffle=True,
                 collate_fn=collate_fn,
+                num_workers=self.cfg.dataloader_num_workers,
+                pin_memory=True,
             )
 
             for batch in dataloader:
@@ -672,6 +684,20 @@ class GRPOTrainer:
                         f"LR: {metrics['lr']:.2e}"
                     )
                     logger.info(log_msg)
+                    self.metrics_tracker.log_train(
+                        step=self.global_step,
+                        loss=metrics["loss"],
+                        policy_loss=metrics["policy_loss"],
+                        kl=metrics["kl"],
+                        reward_mean=metrics["reward_mean"],
+                        reward_std=metrics["reward_std"],
+                        reward_acc=metrics["reward_acc"],
+                        reward_len=metrics["reward_len"],
+                        reward_style=metrics["reward_style"],
+                        advantage_mean=metrics["advantage_mean"],
+                        grad_norm=metrics["grad_norm"],
+                        lr=metrics["lr"],
+                    )
 
                 # Save checkpoint
                 if self.global_step % self.cfg.save_steps == 0 and self.accelerator.is_main_process:
@@ -690,6 +716,11 @@ class GRPOTrainer:
                 ):
                     val_metrics = self.validate(self.val_dataset)
                     logger.info(f"Val reward: {val_metrics['val_reward']:.4f} (n={val_metrics['val_samples']})")
+                    self.metrics_tracker.log_eval(
+                        step=self.global_step,
+                        val_reward=val_metrics["val_reward"],
+                        val_samples=val_metrics["val_samples"],
+                    )
                     if val_metrics["val_reward"] > self.best_val_reward:
                         self.best_val_reward = val_metrics["val_reward"]
                         best_dir = os.path.join(self.cfg.output_dir, "best")
@@ -704,7 +735,9 @@ class GRPOTrainer:
             final_dir = os.path.join(self.cfg.output_dir, "final")
             os.makedirs(final_dir, exist_ok=True)
             self.accelerator.unwrap_model(self.policy_model).save_pretrained(final_dir)
+            self.metrics_tracker.close()
             logger.info(f"Final model saved: {final_dir}")
+            logger.info(f"Metrics saved to: {self.metrics_tracker.metrics_dir}")
             logger.info("GRPO training complete!")
 
 

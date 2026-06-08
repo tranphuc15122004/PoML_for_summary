@@ -1,0 +1,124 @@
+#!/bin/bash
+#PBS -N poml_grpo_training
+#PBS -q gpuhopper
+#PBS -l ncpus=24,ngpus=1,mem=120gb
+#PBS -l walltime=24:00:00
+#PBS -P hn98
+#PBS -l storage=scratch/jp09+gdata/hn98
+#PBS -o /scratch/jp09/dd9648/PoML_for_summary/logs/grpo_%j.out
+#PBS -e /scratch/jp09/dd9648/PoML_for_summary/logs/grpo_%j.err
+#PBS -j oe
+
+# ==============================================================================
+# PoML for Summary - GRPO Training Only
+# ==============================================================================
+# Usage:
+#   qsub train_grpo.pbs
+#   qsub -v GPU_MODEL=v100 train_grpo.pbs
+#   qsub -v RESUME_CHECKPOINT=models/grpo_checkpoints/checkpoint-100 train_grpo.pbs
+# ==============================================================================
+
+set -euo pipefail
+
+PROJECT_ROOT="/scratch/jp09/dd9648/PoML_for_summary"
+VENV_PATH="${PROJECT_ROOT}/.venv"
+SRC_PATH="${PROJECT_ROOT}/src"
+LOGS_DIR="${PROJECT_ROOT}/logs"
+RESUME_CHECKPOINT="${RESUME_CHECKPOINT:-}"
+
+# Auto-detect GPU from nvidia-smi if GPU_MODEL not set
+if [ -z "${GPU_MODEL:-}" ]; then
+    _GPU=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)
+    case "${_GPU}" in
+        *H200*|*Hopper*) GPU_MODEL="h200" ;;
+        *A100*)          GPU_MODEL="a100" ;;
+        *V100*)          GPU_MODEL="v100" ;;
+        *)               GPU_MODEL="a100" ;;
+    esac
+    echo "Auto-detected GPU_MODEL=${GPU_MODEL} from: ${_GPU}"
+fi
+
+case "${GPU_MODEL}" in
+    h200)
+        DTYPE="bf16"
+        GRPO_BATCH=8
+        GRAD_ACCUM=2   # effective prompts=16 per update
+        ;;
+    a100)
+        DTYPE="bf16"
+        GRPO_BATCH=4
+        GRAD_ACCUM=2
+        ;;
+    v100)
+        DTYPE="fp16"
+        GRPO_BATCH=2
+        GRAD_ACCUM=4
+        ;;
+    *)
+        DTYPE="bf16"
+        GRPO_BATCH=8
+        GRAD_ACCUM=2
+        ;;
+esac
+
+mkdir -p "${LOGS_DIR}"
+cd "${PROJECT_ROOT}"
+
+echo "=============================================================="
+echo "GRPO Training"
+echo "Job ID: ${PBS_JOBID}"
+echo "Node: $(hostname)"
+echo "GPU: $(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)"
+echo "GPU Model: ${GPU_MODEL}"
+echo "Dtype: ${DTYPE}"
+echo "Batch Size: ${GRPO_BATCH}"
+if [ -n "${RESUME_CHECKPOINT}" ]; then
+    echo "Resume from: ${RESUME_CHECKPOINT}"
+fi
+echo "Start time: $(date)"
+echo "=============================================================="
+
+source "${VENV_PATH}/bin/activate"
+export PYTHONPATH="${SRC_PATH}:${PYTHONPATH}"
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+# Compute nodes have no internet access — use local model
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+export HF_DATASETS_CACHE="/scratch/jp09/dd9648/.cache/huggingface/datasets"
+LOCAL_MODEL="/g/data/hn98/dd9648/models/Qwen2.5-3B-Instruct"
+mkdir -p "${HF_DATASETS_CACHE}"
+
+# Build resume argument if provided
+RESUME_ARG=""
+if [ -n "${RESUME_CHECKPOINT}" ] && [ -d "${RESUME_CHECKPOINT}" ]; then
+    RESUME_ARG="--resume ${RESUME_CHECKPOINT}"
+fi
+
+# Write per-run config overrides (batch/grad_accum vary by GPU)
+OVERRIDE_CFG="${LOGS_DIR}/grpo_run_config.json"
+python -c "
+import json
+print(json.dumps({
+    'per_device_train_batch_size': ${GRPO_BATCH},
+    'gradient_accumulation_steps': ${GRAD_ACCUM},
+    'bf16': $([ '${DTYPE}' = 'bf16' ] && echo 'true' || echo 'false'),
+    'fp16': $([ '${DTYPE}' = 'fp16' ] && echo 'true' || echo 'false'),
+}))" > "${OVERRIDE_CFG}"
+
+# GRPO Training
+python src/SFT_GRPO/train_grpo.py \
+    --model_name "${LOCAL_MODEL}" \
+    --output_dir "models/grpo_checkpoints" \
+    --lr 5e-7 \
+    --num_generations 4 \
+    --beta 0.04 \
+    --total_steps 800 \
+    --train_data "data/grpo_train.jsonl" \
+    --val_data "data/grpo_val.jsonl" \
+    --config "${OVERRIDE_CFG}" \
+    ${RESUME_ARG}
+
+echo "=============================================================="
+echo "GRPO complete. Model saved to models/grpo_checkpoints/"
+echo "End time: $(date)"
+echo "=============================================================="
