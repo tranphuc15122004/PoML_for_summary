@@ -217,20 +217,38 @@ class MetricsCallback(TrainerCallback):
 
         # Training metrics
         if "loss" in last:
+            logger.info(
+                "step=%d  loss=%.4f  lr=%.2e  epoch=%.4f  grad_norm=%.4f",
+                state.global_step,
+                last["loss"],
+                last.get("learning_rate", args.learning_rate),
+                round(state.epoch, 4) if state.epoch is not None else 0,
+                last.get("grad_norm", 0),
+            )
             self.tracker.log_train(
                 step=state.global_step,
                 loss=last["loss"],
                 lr=last.get("learning_rate", args.learning_rate),
                 epoch=round(state.epoch, 4) if state.epoch is not None else None,
                 grad_norm=last.get("grad_norm"),
+                samples_per_sec=last.get("train_samples_per_second"),
+                steps_per_sec=last.get("train_steps_per_second"),
                 total_steps=state.max_steps if state.max_steps else None,
             )
 
         # Evaluation metrics
         if "eval_loss" in last:
+            logger.info(
+                "step=%d  eval_loss=%.4f  eval_runtime=%.1fs",
+                state.global_step,
+                last["eval_loss"],
+                last.get("eval_runtime", 0),
+            )
             self.tracker.log_eval(
                 step=state.global_step,
                 eval_loss=last["eval_loss"],
+                eval_runtime=last.get("eval_runtime"),
+                eval_samples_per_sec=last.get("eval_samples_per_second"),
             )
 
     def on_train_end(

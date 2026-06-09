@@ -77,6 +77,24 @@ def rouge_l_f1(generated: str, reference: str) -> float:
     return round(f1, 4)
 
 
+def rouge_n(generated: str, reference: str, n: int = 2) -> float:
+    """ROUGE-N F1 score using n-gram overlap (no external deps)."""
+    from collections import Counter
+
+    def ngrams(words):
+        return [tuple(words[i: i + n]) for i in range(len(words) - n + 1)]
+
+    gen_grams = ngrams(generated.lower().split())
+    ref_grams = ngrams(reference.lower().split())
+    if not gen_grams or not ref_grams:
+        return 0.0
+    overlap = sum((Counter(gen_grams) & Counter(ref_grams)).values())
+    p = overlap / len(gen_grams)
+    r = overlap / len(ref_grams)
+    f1 = 2 * p * r / (p + r) if p + r > 0 else 0.0
+    return round(f1, 4)
+
+
 def accuracy_reward(generated: str, reference: str) -> float:
     """Accuracy reward: ROUGE-L F1 score.
 

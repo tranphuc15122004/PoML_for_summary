@@ -445,6 +445,8 @@ def build_all_splits(
 
     # ViMs 80% (240/300 clusters)
     logger.info("Loading ViMs for GRPO...")
+    vims_samples: List[Dict] = []
+    split_idx: int = 0
     try:
         vims = ViMsDataset(raw_cfg, annotator_idx=0)
         vims_samples = list(vims)
@@ -544,7 +546,10 @@ def build_all_splits(
 # ==============================================================================
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s | %(levelname)s | %(message)s",
+    )
 
     augmenter = PromptAugmenter()
     splits = build_all_splits(
@@ -553,6 +558,12 @@ if __name__ == "__main__":
         max_source_chars=8000,
         max_summary_chars=1500,
     )
+
+    if not splits.sft_train.samples:
+        raise RuntimeError(
+            "SFT train split is empty — no data was loaded.\n"
+            "Check that VDT_Textsum/vietnews-master/ and VDT_Textsum/wikilingua/ exist."
+        )
 
     splits.save_all("data")
 

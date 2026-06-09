@@ -1,0 +1,128 @@
+#!/bin/bash
+#PBS -N debug_flash_h200
+#PBS -q gpuhopper
+#PBS -l ncpus=12,ngpus=1,mem=24gb
+#PBS -l walltime=00:30:00
+#PBS -P hn98
+#PBS -l storage=scratch/jp09+gdata/hn98
+#PBS -o /scratch/jp09/dd9648/PoML_for_summary/logs/
+#PBS -j oe
+
+# Debug script: verify flash_attn 2.x works correctly on H200 with the PoML venv.
+# Runs a small forward + backward pass through Qwen2.5-3B with flash_attention_2.
+# Submit: qsub scripts/pbs/debug_flash_h200.pbs
+
+set -euo pipefail
+
+PROJECT_ROOT="/scratch/jp09/dd9648/PoML_for_summary"
+cd "${PROJECT_ROOT}"
+
+echo "=============================================================="
+echo "Flash-Attn Debug — H200"
+echo "Job ID:    ${PBS_JOBID}"
+echo "Node:      $(hostname)"
+echo "GPU:       $(nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader)"
+echo "Start:     $(date)"
+echo "=============================================================="
+
+source "${PROJECT_ROOT}/.venv/bin/activate"
+export PYTHONPATH="${PROJECT_ROOT}/src:${PYTHONPATH:-}"
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+export HF_DATASETS_OFFLINE=1
+export TOKENIZERS_PARALLELISM=false
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+
+MODEL_PATH="/g/data/hn98/dd9648/models/Qwen2.5-3B-Instruct"
+
+python - <<'PY'
+import os, sys, torch
+
+print("=== Step 1: Basic environment ===")
+print(f"torch:      {torch.__version__}")
+print(f"cuda:       {torch.version.cuda}")
+print(f"GPU:        {torch.cuda.get_device_name(0)}")
+print(f"VRAM:       {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
+print(f"Compute cap: sm{torch.cuda.get_device_capability(0)[0]}{torch.cuda.get_device_capability(0)[1]}")
+print()
+
+print("=== Step 2: flash_attn import ===")
+import flash_attn
+from flash_attn import flash_attn_func
+print(f"flash_attn: {flash_attn.__version__}")
+print()
+
+print("=== Step 3: flash_attn functional test (random Q/K/V) ===")
+B, S, H, D = 2, 1024, 16, 64   # batch, seq, heads, head_dim
+q = torch.randn(B, S, H, D, dtype=torch.bfloat16, device="cuda")
+k = torch.randn(B, S, H, D, dtype=torch.bfloat16, device="cuda")
+v = torch.randn(B, S, H, D, dtype=torch.bfloat16, device="cuda")
+out = flash_attn_func(q, k, v, causal=True)
+print(f"flash_attn_func output shape: {out.shape}  dtype: {out.dtype}  OK")
+print()
+
+print("=== Step 4: Load Qwen2.5-3B with flash_attention_2 ===")
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+MODEL_PATH = os.environ.get("MODEL_PATH", "/g/data/hn98/dd9648/models/Qwen2.5-3B-Instruct")
+tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH, trust_remote_code=True, use_fast=True)
+model = AutoModelForCausalLM.from_pretrained(
+    MODEL_PATH,
+    torch_dtype=torch.bfloat16,
+    device_map="auto",
+    attn_implementation="flash_attention_2",
+    trust_remote_code=True,
+)
+model.config.use_cache = False
+
+allocated = torch.cuda.memory_allocated() / 1e9
+print(f"Model loaded. GPU mem allocated: {allocated:.2f} GB")
+
+# Check attn impl on first layer
+first_attn = model.model.layers[0].self_attn
+attn_class = type(first_attn).__name__
+print(f"Attention class: {attn_class}")
+assert "Flash" in attn_class or "flash" in str(model.config._attn_implementation).lower(), \
+    f"Expected flash attention, got: {attn_class}"
+print("Flash attention confirmed in model layers.")
+print()
+
+print("=== Step 5: Forward pass (small batch) ===")
+text = "Tóm tắt văn bản sau: Việt Nam là một quốc gia ở Đông Nam Á."
+inputs = tokenizer(text, return_tensors="pt").to("cuda")
+with torch.no_grad():
+    out = model(**inputs)
+print(f"Logits shape: {out.logits.shape}  OK")
+print()
+
+print("=== Step 6: Forward + backward (gradient flow through LoRA) ===")
+from peft import LoraConfig, get_peft_model
+lora_cfg = LoraConfig(r=32, lora_alpha=32, lora_dropout=0.05,
+                      target_modules=["q_proj","k_proj","v_proj","o_proj",
+                                      "gate_proj","up_proj","down_proj"],
+                      bias="none", task_type="CAUSAL_LM")
+model = get_peft_model(model, lora_cfg)
+model.print_trainable_parameters()
+
+inputs = tokenizer(
+    ["Tóm tắt: Hà Nội là thủ đô của Việt Nam.",
+     "Summarize: The Eiffel Tower is in Paris, France."],
+    return_tensors="pt", padding=True, truncation=True, max_length=512
+).to("cuda")
+labels = inputs["input_ids"].clone()
+labels[labels == tokenizer.pad_token_id] = -100
+
+loss = model(**inputs, labels=labels).loss
+loss.backward()
+print(f"Loss: {loss.item():.4f}  (backward OK)")
+
+peak = torch.cuda.max_memory_allocated() / 1e9
+print(f"Peak GPU mem: {peak:.2f} GB")
+print()
+
+print("=== All steps PASSED — flash_attn 2 is working on H200 ===")
+PY
+
+echo "=============================================================="
+echo "Debug complete. End: $(date)"
+echo "=============================================================="

@@ -26,10 +26,15 @@ for p in [_PROJECT_ROOT, _SRC_DIR]:
         sys.path.remove(p)
     sys.path.insert(0, p)
 
-from dataset.dataset import DatasetConfig, VietNewsDataset, WikiLinguaDataset
-
-logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+# Configure logging before importing project modules
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s",
+    force=True,
+)
 logger = logging.getLogger(__name__)
+
+from dataset.dataset import DatasetConfig, VietNewsDataset, WikiLinguaDataset
 
 SYSTEM_PROMPT = (
     "Bạn là một trợ lý AI chuyên tóm tắt văn bản tiếng Việt. "
@@ -98,6 +103,12 @@ def main(data_root: str = "VDT_Textsum", out_dir: str = "data"):
         if i >= 500:
             break
         val_samples.append(make_sample(s["source"], s["target"]))
+
+    if not train_samples:
+        raise RuntimeError(
+            "Training data is empty — no samples were loaded.\n"
+            "Check that VDT_Textsum/vietnews-master/ and VDT_Textsum/wikilingua/ exist."
+        )
 
     save_jsonl(train_samples, os.path.join(out_dir, "sft_train_no_aug.jsonl"))
     save_jsonl(val_samples, os.path.join(out_dir, "sft_val_no_aug.jsonl"))

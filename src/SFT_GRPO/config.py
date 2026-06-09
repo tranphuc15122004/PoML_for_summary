@@ -3,7 +3,72 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Dict, List, Optional
+
+
+def detect_gpu_config() -> Dict:
+    """Return optimal SFTConfig overrides based on GPU VRAM.
+
+    Tiers target effective batch size = 16 across all GPUs.
+    Falls back to conservative defaults if torch/CUDA unavailable.
+    """
+    try:
+        import torch
+        if not torch.cuda.is_available():
+            return dict(per_device_train_batch_size=1, gradient_accumulation_steps=16,
+                        max_seq_length=1024, gradient_checkpointing=True,
+                        bf16=False, fp16=False, packing=False)
+
+        vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
+        gpu_name = torch.cuda.get_device_name(0)
+
+        if vram_gb >= 100:      # H200 141 GB, H100 SXM 80 GB (reported as ~94 GB usable)
+            tier, params = "H200/H100", dict(
+                per_device_train_batch_size=16, gradient_accumulation_steps=1,
+                max_seq_length=3072, gradient_checkpointing=False,
+                bf16=True, fp16=False, packing=True,
+            )
+        elif vram_gb >= 60:     # A100 80 GB
+            tier, params = "A100-80G", dict(
+                per_device_train_batch_size=8, gradient_accumulation_steps=2,
+                max_seq_length=3072, gradient_checkpointing=False,
+                bf16=True, fp16=False, packing=True,
+            )
+        elif vram_gb >= 35:     # A100 40 GB
+            tier, params = "A100-40G", dict(
+                per_device_train_batch_size=4, gradient_accumulation_steps=4,
+                max_seq_length=3072, gradient_checkpointing=True,
+                bf16=True, fp16=False, packing=True,
+            )
+        elif vram_gb >= 20:     # RTX 3090/4090, A30 (24 GB)
+            tier, params = "24GB", dict(
+                per_device_train_batch_size=2, gradient_accumulation_steps=8,
+                max_seq_length=2048, gradient_checkpointing=True,
+                bf16=True, fp16=False, packing=True,
+            )
+        else:                   # V100 32 GB reported ~31 GB; 16 GB cards
+            tier, params = "V100/≤32GB", dict(
+                per_device_train_batch_size=1, gradient_accumulation_steps=16,
+                max_seq_length=2048, gradient_checkpointing=True,
+                bf16=False, fp16=True, packing=False,
+            )
+
+        eff = params["per_device_train_batch_size"] * params["gradient_accumulation_steps"]
+        print(
+            f"[GPU] {gpu_name} ({vram_gb:.0f} GB) → tier={tier} | "
+            f"batch={params['per_device_train_batch_size']} × "
+            f"{params['gradient_accumulation_steps']} (eff={eff}) | "
+            f"seq={params['max_seq_length']} | "
+            f"gc={params['gradient_checkpointing']} | "
+            f"packing={params['packing']}"
+        )
+        return params
+
+    except Exception as exc:
+        print(f"[GPU] Detection failed ({exc}), using conservative defaults")
+        return dict(per_device_train_batch_size=2, gradient_accumulation_steps=8,
+                    max_seq_length=2048, gradient_checkpointing=True,
+                    bf16=True, fp16=False, packing=False)
 
 
 # ==============================================================================
@@ -14,8 +79,8 @@ from typing import List, Optional
 class ModelConfig:
     """Model and quantization configuration."""
 
-    model_name_or_path: str = "Qwen/Qwen2.5-3B-Instruct"
-    """HuggingFace model ID or local path."""
+    model_name_or_path: str = "/g/data/hn98/dd9648/models/Qwen2.5-3B-Instruct"
+    """Local path to model weights (offline cluster — no HuggingFace downloads)."""
 
     load_in_4bit: bool = False
     """Use FP16/bf16 LoRA instead of 4-bit QLoRA. Set True only if VRAM < 12 GB."""
@@ -100,6 +165,13 @@ class SFTConfig:
     # LoRA specifics
     neftune_noise_alpha: Optional[float] = None
     """Optional — NEFTune noise for better generalization."""
+
+    # Batch calibration
+    auto_calibrate_batch: bool = True
+    """Run a 2-step VRAM probe before training to find the largest batch size
+    that fits within calibrate_target_vram_fraction of GPU memory."""
+    calibrate_target_vram_fraction: float = 0.90
+    """Target VRAM utilisation for calibration (0–1). 0.90 leaves 10% headroom."""
 
     # Logging & saving
     logging_steps: int = 5
@@ -199,8 +271,8 @@ class GRPOConfig:
     reward_weight_style: float = 0.2
 
     # Style reward (LLM-as-Judge)
-    judge_model_name: str = "Qwen/Qwen2.5-3B-Instruct"
-    """Model used for style evaluation. Use 'gpt-4o-mini' if API available."""
+    judge_model_name: str = "/g/data/hn98/dd9648/models/Qwen2.5-3B-Instruct"
+    """Local path to judge model for style reward (offline cluster)."""
 
     # Logging & saving
     logging_steps: int = 5
@@ -235,11 +307,21 @@ class EvalConfig:
 
     output_dir: str = "models/eval_results"
 
+    # Judge/backbone model for BARTScore and G-Eval
+    judge_model_path: str = "/g/data/hn98/dd9648/models/Qwen3.5-4B"
+
+    # Feature flags — disable for fast eval without LLM-based metrics
+    enable_bart_score: bool = True
+    enable_geval: bool = True
+
+    # Base model path used when loading LoRA adapters
+    base_model_path: str = "/g/data/hn98/dd9648/models/Qwen3.5-4B"
+
     # Models to compare
     model_paths: dict = field(
         default_factory=lambda: {
-            "base": "Qwen/Qwen2.5-3B-Instruct",
-            "sft": "models/sft_lora",
-            "grpo": "models/grpo_checkpoints",
+            "base": "/g/data/hn98/dd9648/models/Qwen3.5-4B",
+            "sft_aug": "models/sft_aug_Qwen3.5-4B/final",
+            "sft_no_aug": "models/sft_no_aug_Qwen3.5-4B/final",
         }
     )

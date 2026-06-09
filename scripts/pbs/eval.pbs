@@ -1,0 +1,83 @@
+#!/bin/bash
+#PBS -N poml_eval
+#PBS -q gpuhopper
+#PBS -l ncpus=12,ngpus=1,mem=120gb
+#PBS -l walltime=12:00:00
+#PBS -P hn98
+#PBS -l storage=scratch/jp09+gdata/hn98
+#PBS -o /scratch/jp09/dd9648/PoML_for_summary/logs/
+#PBS -j oe
+
+# ==============================================================================
+# Evaluate all trained summarization models on the test set.
+# Supports any model via environment variables.
+#
+# Submit:
+#   qsub scripts/pbs/eval.pbs                                    # full eval
+#   qsub -v QUICK=1 scripts/pbs/eval.pbs                         # quick test
+#   qsub -v FAMILIES=qwen3.5 scripts/pbs/eval.pbs                # specific family
+#   qsub -v MODEL_PATHS="a=/path/a,b=/path/b" scripts/pbs/eval.pbs
+# ==============================================================================
+
+set -euo pipefail
+
+PROJECT_ROOT="/scratch/jp09/dd9648/PoML_for_summary"
+VENV_PATH="${PROJECT_ROOT}/.venv"
+SRC_PATH="${PROJECT_ROOT}/src"
+LOGS_DIR="${PROJECT_ROOT}/logs"
+
+# Overridable via environment variables
+QUICK="${QUICK:-0}"                        # set to 1 for quick test (20 samples)
+FAMILIES="${FAMILIES:-all}"                # all, qwen2.5, qwen3.5
+MODEL_PATHS="${MODEL_PATHS:-}"             # custom "a=path,b=path"
+JUDGE_MODEL="${JUDGE_MODEL:-}"             # override judge model
+
+mkdir -p "${LOGS_DIR}"
+cd "${PROJECT_ROOT}"
+
+echo "=============================================================="
+echo "Evaluation"
+echo "Job ID:    ${PBS_JOBID}"
+echo "Node:      $(hostname)"
+echo "GPU:       $(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)"
+echo "Quick:     ${QUICK}"
+echo "Families:  ${FAMILIES}"
+echo "Start:     $(date)"
+echo "=============================================================="
+
+source "${VENV_PATH}/bin/activate"
+export PYTHONPATH="${SRC_PATH}:${PYTHONPATH:-}"
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+export HF_DATASETS_OFFLINE=1
+export TOKENIZERS_PARALLELISM=false
+
+_EVAL_START=$(date +%s)
+
+# Build args
+_ARGS=""
+if [ "${QUICK}" = "1" ]; then
+    _ARGS="${_ARGS} --quick"
+elif [ -n "${FAMILIES}" ] && [ "${FAMILIES}" != "all" ]; then
+    _ARGS="${_ARGS} --families ${FAMILIES}"
+fi
+if [ -n "${MODEL_PATHS}" ]; then
+    _ARGS="${_ARGS} --models \"${MODEL_PATHS}\""
+fi
+if [ -n "${JUDGE_MODEL}" ]; then
+    _ARGS="${_ARGS} --judge_model ${JUDGE_MODEL}"
+fi
+
+echo ">>> Starting evaluation..."
+# shellcheck disable=SC2086
+PYTHONPATH="${SRC_PATH}" python launch_eval.py ${_ARGS}
+
+_EVAL_END=$(date +%s)
+_EVAL_DURATION=$((_EVAL_END - _EVAL_START))
+echo "=============================================================="
+echo "Evaluation complete."
+echo "Job ID:    ${PBS_JOBID}"
+echo "Duration:  $((_EVAL_DURATION / 3600))h $(((_EVAL_DURATION % 3600) / 60))m $((_EVAL_DURATION % 60))s"
+echo "End time:  $(date)"
+echo "=============================================================="

@@ -96,6 +96,8 @@ OVERRIDE_CFG="${LOGS_DIR}/sft_run_config.json"
 python -c "import json; print(json.dumps({'gradient_accumulation_steps': ${GRAD_ACCUM}}))" > "${OVERRIDE_CFG}"
 
 # SFT Training (using train_sft.py for full CLI arg support)
+_SFT_START=$(date +%s)
+echo ">>> Starting SFT training..."
 python src/SFT_GRPO/train_sft.py \
     --model_name "${LOCAL_MODEL}" \
     --max_seq_length "${MAX_SEQ_LEN}" \
@@ -104,9 +106,12 @@ python src/SFT_GRPO/train_sft.py \
     --fp16 "$([ "${DTYPE}" = "fp16" ] && echo True || echo False)" \
     --output_dir "models/sft_lora" \
     --config "${OVERRIDE_CFG}"
-")
 
+_SFT_END=$(date +%s)
+_SFT_DURATION=$((_SFT_END - _SFT_START))
 echo "=============================================================="
 echo "SFT complete. Model saved to models/sft_lora/"
-echo "End time: $(date)"
+echo "Job ID:    ${PBS_JOBID}"
+echo "Duration:  $((_SFT_DURATION / 3600))h $(((_SFT_DURATION % 3600) / 60))m $((_SFT_DURATION % 60))s"
+echo "End time:  $(date)"
 echo "=============================================================="

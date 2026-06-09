@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python *)",
+      "Read(//scratch/jp09/dd9648/PoML_for_summary/logs/**)"
+    ]
+  }
+}

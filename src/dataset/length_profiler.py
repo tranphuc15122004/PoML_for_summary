@@ -31,17 +31,19 @@ for p in [_PROJECT_ROOT, _SRC_DIR]:
         sys.path.remove(p)
     sys.path.insert(0, p)
 
+# Configure logging before importing project modules
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s",
+    force=True,
+)
+
 from dataset.dataset import (
     DatasetConfig,
     VietNewsDataset,
     WikiLinguaDataset,
     ViMsDataset,
     VLSPDataset,
-)
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(levelname)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
 
