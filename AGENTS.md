@@ -14,8 +14,19 @@ Python 3.12 venv at `.venv/`. All deps in `requirements.txt`. No extra build ste
 ## Source layout
 
 ```
+docs/               # project documentation
+  DATASETS.md
+  pipeline_plan.md
+  problem_statement.md
+scripts/
+  launch/           # convenience Python entry points
+    sft.py, sft_aug.py, sft_no_aug.py, eval.py
+  local/            # local shell scripts
+  pbs/              # PBS/Torque job scripts
+  slurm/            # Slurm job scripts
+  tools/            # utility scripts (batch tests, config verification)
 src/SFT_GRPO/       # training code
-  train_sft.py      # Supervised Fine-Tuning (also: launch_sft.py convenience entry)
+  train_sft.py      # Supervised Fine-Tuning
   train_grpo.py     # GRPO alignment (custom loop, not TRL's)
   rewards.py        # R_acc (ROUGE-L), R_len, R_style (LLM-as-Judge)
   evaluate.py       # Compare base / SFT / GRPO models
@@ -37,7 +48,7 @@ python src/dataset/length_profiler.py
 python src/dataset/augmenter.py                   # outputs to data/
 
 # 2. SFT
-python launch_sft.py                              # stable defaults, ~20 GB VRAM (A100/H200)
+python scripts/launch/sft.py                      # stable defaults, ~20 GB VRAM (A100/H200)
 python src/SFT_GRPO/train_sft.py --help           # CLI args override config defaults
 
 # 3. GRPO (uses SFT output as starting point — loads same base model)
@@ -58,7 +69,7 @@ python src/SFT_GRPO/evaluate.py --models base,sft=models/sft_lora/final
 
 - `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` set automatically in `train_sft.py` (helps all GPUs).
 - `packing` requires flash-attention v2+ (A100/H200). Keep `False` on V100.
-- Defaults are tuned for A100/H200. For V100, override in `launch_sft.py` or pass CLI flags.
+- Defaults are tuned for A100/H200. For V100, override in `scripts/launch/sft.py` or pass CLI flags.
 
 ## SFT metrics logging
 
@@ -98,4 +109,4 @@ WandB logging via `--report_to wandb` still works independently.
 
 ## Modifying configs
 
-All configs are Python `dataclasses` in `src/SFT_GRPO/config.py`. Edit them directly or pass CLI args. `launch_sft.py` imports `SFTConfig` / `ModelConfig` directly — override by editing the file or using `--config path/to/json`.
+All configs are Python `dataclasses` in `src/SFT_GRPO/config.py`. Edit them directly or pass CLI args. `scripts/launch/sft.py` imports `SFTConfig` / `ModelConfig` directly — override by editing the file or using `--config path/to/json`.

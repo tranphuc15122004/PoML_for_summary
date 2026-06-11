@@ -170,7 +170,7 @@ print(f'Tokenizer loaded: {tok.__class__.__name__}, vocab_size={len(tok)}')
 
 echo ""
 echo "--- 2b. Run SFT training (debug mode) ---"
-debug_cmd python launch_sft.py \
+debug_cmd python scripts/launch/sft.py \
     --max_seq_length "${MAX_SEQ_LEN}" \
     --packing "${PACKING}" \
     --per_device_train_batch_size "${SFT_BATCH}" \

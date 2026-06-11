@@ -38,7 +38,7 @@ Raw datasets expected at `VDT_Textsum/{VietNews,WikiLingua,VLSP,ViMs}/`.
 ./scripts/local/train_sft.sh
 
 # Manual
-PYTHONPATH=src python launch_sft.py
+PYTHONPATH=src python scripts/launch/sft.py
 
 # CLI with overrides
 PYTHONPATH=src python src/SFT_GRPO/train_sft.py --model_name Qwen/Qwen2.5-3B-Instruct --output_dir models/sft_lora --epochs 1.0
@@ -71,6 +71,17 @@ sbatch scripts/slurm/train_sft.slurm   # Slurm
 ## Code Architecture
 
 ```
+docs/               # project documentation
+  DATASETS.md
+  pipeline_plan.md
+  problem_statement.md
+scripts/
+  launch/           # convenience Python entry points
+    sft.py, sft_aug.py, sft_no_aug.py, eval.py
+  local/            # shell scripts
+  pbs/              # PBS/Torque job scripts
+  slurm/            # Slurm job scripts
+  tools/            # utility scripts (batch tests, config verification)
 src/
 ├── dataset/
 │   ├── dataset.py          # BaseSummarizationDataset ABC + 4 concrete datasets
@@ -87,7 +98,7 @@ src/
     │                         R_style (LLM-as-Judge 1–5 scale). Composite: w_acc·R_acc + w_len·R_len + w_style·R_style
     ├── metrics_logger.py   # MetricsTracker + MetricsCallback (CSV logging to output_dir/metrics/)
     └── evaluate.py         # Evaluation pipeline
-launch_sft.py               # Top-level SFT launch script with hardcoded stable defaults
+```
 ```
 
 ### Key design decisions

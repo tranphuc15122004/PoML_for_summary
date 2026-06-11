@@ -6,17 +6,17 @@ Computes ROUGE-1/2/L, length error, length hit rate, BARTScore, G-Eval.
 
 Usage:
     # Quick test — 20 samples, no LLM-based metrics
-    PYTHONPATH=src python launch_eval.py --quick
+    PYTHONPATH=src python scripts/launch/eval.py --quick
 
     # Full eval (all discovered models)
-    PYTHONPATH=src python launch_eval.py
+    PYTHONPATH=src python scripts/launch/eval.py
 
     # Specific family
-    PYTHONPATH=src python launch_eval.py --families qwen2.5
-    PYTHONPATH=src python launch_eval.py --families qwen3.5
+    PYTHONPATH=src python scripts/launch/eval.py --families qwen2.5
+    PYTHONPATH=src python scripts/launch/eval.py --families qwen3.5
 
     # Custom model paths
-    PYTHONPATH=src python launch_eval.py --models "base=/path/to/model,sft_aug=/path/to/adapter/final"
+    PYTHONPATH=src python scripts/launch/eval.py --models "base=/path/to/model,sft_aug=/path/to/adapter/final"
 
     # With PBS
     qsub scripts/pbs/eval.pbs
@@ -31,10 +31,21 @@ import json
 import logging
 import os
 import sys
+import types
 from typing import Dict, List, Optional
 
-# Ensure src/ is on path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
+# bitsandbytes 0.44.x references triton.ops which was removed in triton 2.x.
+# PEFT imports bitsandbytes unconditionally; stub the missing submodule.
+if "triton.ops" not in sys.modules:
+    _triton_ops = types.ModuleType("triton.ops")
+    _triton_perf = types.ModuleType("triton.ops.matmul_perf_model")
+    _triton_perf.early_config_prune = lambda *a, **kw: None
+    _triton_perf.estimate_matmul_time = lambda *a, **kw: 0.0
+    sys.modules["triton.ops"] = _triton_ops
+    sys.modules["triton.ops.matmul_perf_model"] = _triton_perf
+
+# Ensure src/ is on path (file is at scripts/launch/eval.py → go up twice for project root)
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 import numpy as np
 import torch
@@ -255,7 +266,7 @@ def main():
             model, tokenizer = load_eval_model(
                 model_path,
                 base_model_path=None,
-                load_in_4bit=True,
+                load_in_4bit=False,
             )
 
             metrics = evaluate_model(

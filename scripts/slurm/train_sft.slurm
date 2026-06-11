@@ -66,7 +66,7 @@ source "${VENV_PATH}/bin/activate"
 export PYTHONPATH="${SRC_PATH}:${PYTHONPATH}"
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
-python launch_sft.py \
+python scripts/launch/sft.py \
     --max_seq_length "${MAX_SEQ_LEN}" \
     --packing "${PACKING}" \
     --per_device_train_batch_size "${SFT_BATCH}" \

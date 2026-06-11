@@ -7,14 +7,26 @@ Run data prep first:
     PYTHONPATH=src python src/dataset/prepare_no_aug.py
 
 Usage:
-    python launch_sft_no_aug.py
-    python launch_sft_no_aug.py --model /path/to/model --epochs 10
-    python launch_sft_no_aug.py --resume
+    python scripts/launch/sft_no_aug.py
+    python scripts/launch/sft_no_aug.py --model /path/to/model --epochs 10
+    python scripts/launch/sft_no_aug.py --resume
 """
 
 import argparse
 import os
 import sys
+import types
+
+# bitsandbytes 0.44.x references triton.ops which was removed in triton 2.x.
+# PEFT imports bitsandbytes unconditionally during get_peft_model(); stub the
+# missing submodule so the import succeeds without GPU-quantization support.
+if "triton.ops" not in sys.modules:
+    _triton_ops = types.ModuleType("triton.ops")
+    _triton_perf = types.ModuleType("triton.ops.matmul_perf_model")
+    _triton_perf.early_config_prune = lambda *a, **kw: None
+    _triton_perf.estimate_matmul_time = lambda *a, **kw: 0.0
+    sys.modules["triton.ops"] = _triton_ops
+    sys.modules["triton.ops.matmul_perf_model"] = _triton_perf
 
 from SFT_GRPO.config import SFTConfig, ModelConfig, detect_gpu_config
 from SFT_GRPO.train_sft import train

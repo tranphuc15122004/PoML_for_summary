@@ -85,7 +85,7 @@ run_data_prep() {
 
 run_sft() {
     echo ">>> [2/4] SFT Training"
-    python launch_sft.py \
+    python scripts/launch/sft.py \
         --max_seq_length "${MAX_SEQ_LEN}" \
         --packing "${PACKING}" \
         --per_device_train_batch_size "${SFT_BATCH}" \

@@ -85,7 +85,7 @@ def _parse_target_length(length_req: str) -> float:
 def load_eval_model(
     model_path: str,
     base_model_path: Optional[str] = None,
-    load_in_4bit: bool = True,
+    load_in_4bit: bool = False,
 ) -> Tuple[AutoModelForCausalLM, AutoTokenizer]:
     """Load model and tokenizer. Auto-detects LoRA adapters.
 
@@ -547,7 +547,7 @@ def run_evaluation(cfg: EvalConfig) -> Dict[str, Dict]:
             model, tokenizer = load_eval_model(
                 model_path,
                 base_model_path=cfg.base_model_path,
-                load_in_4bit=True,
+                load_in_4bit=False,
             )
             metrics = evaluate_model(
                 model=model,
@@ -700,7 +700,7 @@ if __name__ == "__main__":
                 logger.info(f"\n{'='*60}\nEvaluating: {model_name} ({model_path})\n{'='*60}")
                 try:
                     model, tokenizer = load_eval_model(
-                        model_path, base_model_path=cfg.base_model_path, load_in_4bit=True
+                        model_path, base_model_path=cfg.base_model_path, load_in_4bit=False
                     )
                     metrics = evaluate_model(
                         model=model, tokenizer=tokenizer, test_data=test_data,

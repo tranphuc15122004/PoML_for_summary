@@ -1,6 +1,6 @@
 """Quick verify: H200 config produces expected batch/accum values."""
 import os, sys
-sys.path.insert(0, '/scratch/jp09/dd9648/PoML_for_summary/src')
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 os.environ['HF_HUB_OFFLINE'] = '1'
 os.environ['TRANSFORMERS_OFFLINE'] = '1'
 

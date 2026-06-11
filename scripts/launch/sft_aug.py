@@ -4,15 +4,27 @@
 Supports any model. Auto-derives output_dir and run_name from model name.
 
 Usage:
-    python launch_sft_aug.py
-    python launch_sft_aug.py --model /path/to/model --epochs 5
-    python launch_sft_aug.py --resume
-    python launch_sft_aug.py --resume --checkpoint models/sft_aug_xxx/checkpoint-1000
+    python scripts/launch/sft_aug.py
+    python scripts/launch/sft_aug.py --model /path/to/model --epochs 5
+    python scripts/launch/sft_aug.py --resume
+    python scripts/launch/sft_aug.py --resume --checkpoint models/sft_aug_xxx/checkpoint-1000
 """
 
 import argparse
 import os
 import sys
+import types
+
+# bitsandbytes 0.44.x references triton.ops which was removed in triton 2.x.
+# PEFT imports bitsandbytes unconditionally during get_peft_model(); stub the
+# missing submodule so the import succeeds without GPU-quantization support.
+if "triton.ops" not in sys.modules:
+    _triton_ops = types.ModuleType("triton.ops")
+    _triton_perf = types.ModuleType("triton.ops.matmul_perf_model")
+    _triton_perf.early_config_prune = lambda *a, **kw: None
+    _triton_perf.estimate_matmul_time = lambda *a, **kw: 0.0
+    sys.modules["triton.ops"] = _triton_ops
+    sys.modules["triton.ops.matmul_perf_model"] = _triton_perf
 
 from SFT_GRPO.config import SFTConfig, ModelConfig, detect_gpu_config
 from SFT_GRPO.train_sft import train

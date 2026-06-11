@@ -14,12 +14,25 @@ Usage:
 
 from __future__ import annotations
 
+import sys
+import types
+
+# bitsandbytes 0.44.x references triton.ops which was removed in triton 2.x.
+# PEFT imports bitsandbytes unconditionally during get_peft_model(); stub the
+# missing submodule so the import succeeds without GPU-quantization support.
+if "triton.ops" not in sys.modules:
+    _triton_ops = types.ModuleType("triton.ops")
+    _triton_perf = types.ModuleType("triton.ops.matmul_perf_model")
+    _triton_perf.early_config_prune = lambda *a, **kw: None
+    _triton_perf.estimate_matmul_time = lambda *a, **kw: 0.0
+    sys.modules["triton.ops"] = _triton_ops
+    sys.modules["triton.ops.matmul_perf_model"] = _triton_perf
+
 import json
 import logging
 import os
-import sys
 from collections import defaultdict
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 import torch.nn.functional as F
@@ -104,10 +117,9 @@ class GRPOTrainer:
         4. Policy gradient: L = -min(ρ·A, clip(ρ)·A) + β·KL
     """
 
-    def __init__(self, cfg: GRPOConfig):
+    def __init__(self, cfg: GRPOConfig, resume_from_checkpoint: Optional[str] = None):
         self.cfg = cfg
         self.accelerator = Accelerator(
-            gradient_accumulation_steps=cfg.gradient_accumulation_steps,
             mixed_precision="bf16" if cfg.bf16 else "fp16" if cfg.fp16 else "no",
         )
 
@@ -121,7 +133,7 @@ class GRPOTrainer:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
         # Load policy model (trainable) and reference model (frozen)
-        self.policy_model = self._load_policy_model()
+        self.policy_model = self._load_policy_model(resume_checkpoint=resume_from_checkpoint)
         self.ref_model = self._load_reference_model()
 
         # Data
@@ -150,7 +162,16 @@ class GRPOTrainer:
         )
         # reference model is not prepared (frozen, no training)
 
+        # Recover global_step from checkpoint dir name (e.g. "checkpoint-500" → 500)
         self.global_step = 0
+        if resume_from_checkpoint:
+            dir_name = os.path.basename(resume_from_checkpoint.rstrip("/"))
+            if dir_name.startswith("checkpoint-"):
+                try:
+                    self.global_step = int(dir_name.split("-")[1])
+                    logger.info(f"Resuming from step {self.global_step}")
+                except (IndexError, ValueError):
+                    pass
         self.best_val_reward = -float("inf")
 
         # Persistent metrics logging
@@ -165,37 +186,56 @@ class GRPOTrainer:
     # ------------------------------------------------------------------
 
     def _load_quantized_model(self, model_name: str) -> AutoModelForCausalLM:
-        """Load a model with 4-bit quantization for GRPO."""
-        bnb_config = BitsAndBytesConfig(
-            load_in_4bit=self.cfg.model.load_in_4bit,
-            bnb_4bit_quant_type=self.cfg.model.bnb_4bit_quant_type,
-            bnb_4bit_compute_dtype=getattr(torch, self.cfg.model.bnb_4bit_compute_dtype),
-            bnb_4bit_use_double_quant=self.cfg.model.bnb_4bit_use_double_quant,
-        )
+        """Load model in bf16 (or 4-bit QLoRA when load_in_4bit=True)."""
+        # Probe flash-attn availability — same pattern as train_sft.py
+        try:
+            import flash_attn  # noqa: F401
+            attn_impl = "flash_attention_2"
+        except Exception:
+            attn_impl = "sdpa"
+            logger.warning("flash-attn import failed — falling back to sdpa attention.")
+
+        torch_dtype = getattr(torch, self.cfg.model.bnb_4bit_compute_dtype)
+
+        if self.cfg.model.load_in_4bit:
+            bnb_config = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_quant_type=self.cfg.model.bnb_4bit_quant_type,
+                bnb_4bit_compute_dtype=torch_dtype,
+                bnb_4bit_use_double_quant=self.cfg.model.bnb_4bit_use_double_quant,
+            )
+        else:
+            bnb_config = None
+
         model = AutoModelForCausalLM.from_pretrained(
             model_name,
             quantization_config=bnb_config,
             device_map="auto",
             trust_remote_code=True,
-            torch_dtype=getattr(torch, self.cfg.model.bnb_4bit_compute_dtype),
-            attn_implementation="flash_attention_2",
+            dtype=torch_dtype,
+            attn_implementation=attn_impl,
         )
         model.config.use_cache = False
-        model.config.pretraining_tp = 1
+        if hasattr(model.config, "pretraining_tp"):
+            model.config.pretraining_tp = 1
         return model
 
-    def _load_policy_model(self) -> PeftModel:
-        """Load policy model: base + LoRA (trainable)."""
+    def _load_policy_model(self, resume_checkpoint: Optional[str] = None) -> PeftModel:
+        """Load policy model: base + LoRA (trainable). Optionally resume from checkpoint."""
         base = self._load_quantized_model(self.cfg.model.model_name_or_path)
-        lora_config = LoraConfig(
-            r=self.cfg.model.lora_r,
-            lora_alpha=self.cfg.model.lora_alpha,
-            target_modules=self.cfg.model.lora_target_modules,
-            lora_dropout=self.cfg.model.lora_dropout,
-            bias="none",
-            task_type="CAUSAL_LM",
-        )
-        model = get_peft_model(base, lora_config)
+        if resume_checkpoint and os.path.isdir(resume_checkpoint):
+            model = PeftModel.from_pretrained(base, resume_checkpoint, is_trainable=True)
+            logger.info(f"Resumed policy model from {resume_checkpoint}")
+        else:
+            lora_config = LoraConfig(
+                r=self.cfg.model.lora_r,
+                lora_alpha=self.cfg.model.lora_alpha,
+                target_modules=self.cfg.model.lora_target_modules,
+                lora_dropout=self.cfg.model.lora_dropout,
+                bias="none",
+                task_type="CAUSAL_LM",
+            )
+            model = get_peft_model(base, lora_config)
         model.print_trainable_parameters()
         return model
 
@@ -533,7 +573,7 @@ class GRPOTrainer:
                             for step_idx in range(len(seq))]
             new_logprobs_list.append(seq_logprobs)
 
-        # KL divergence (reference vs policy)
+        # KL divergence: reference model forward (no gradient)
         with torch.no_grad():
             ref_outputs = self.ref_model(
                 input_ids=full_ids,
@@ -541,41 +581,27 @@ class GRPOTrainer:
             )
             ref_logits = ref_outputs.logits
             ref_gen_logits = ref_logits[:, prompt_len - 1: -1]
-            ref_log_probs = F.log_softmax(ref_gen_logits, dim=-1)
+            ref_log_probs = F.log_softmax(ref_gen_logits, dim=-1)  # [B*K, gen_len, vocab]
 
-            kl_sum = 0.0
-            kl_count = 0
-            for seq_idx in range(gen_tokens.shape[0]):
-                for step_idx in range(len(gen_tokens[seq_idx])):
-                    r = ref_log_probs[seq_idx, step_idx, gen_tokens[seq_idx, step_idx]] - \
-                        log_probs[seq_idx, step_idx, gen_tokens[seq_idx, step_idx]]
-                    r = torch.clamp(r, min=-20.0, max=20.0)  # prevent exp overflow
-                    kl_sum += (torch.exp(r) - r - 1).item()
-                    kl_count += 1
-            kl_value = kl_sum / max(kl_count, 1)
+        # Vectorised KL estimator with gradient through policy log_probs:
+        #   KL ≈ exp(log π_ref - log π_θ) - (log π_ref - log π_θ) - 1  per token
+        token_ref_logp = ref_log_probs.gather(-1, gen_tokens.unsqueeze(-1)).squeeze(-1)   # [B*K, gen_len]
+        token_pol_logp = log_probs.gather(-1, gen_tokens.unsqueeze(-1)).squeeze(-1)        # [B*K, gen_len], has grad
+        r = (token_ref_logp - token_pol_logp).clamp(min=-20.0, max=20.0)
+        kl_penalty = (torch.exp(r) - r - 1).mean()  # scalar tensor WITH gradient
 
         # 5. GRPO LOSS
         loss, loss_dict = self._compute_grpo_loss(
             old_logprobs,
             new_logprobs_list,
             advantages,
-            torch.tensor(kl_value, device=self.accelerator.device),
+            kl_penalty,
         )
 
-        # 6. BACKWARD + UPDATE
+        # 6. BACKWARD (optimizer step and zero_grad handled in train() for gradient accumulation)
         self.accelerator.backward(loss)
 
-        # Gradient clipping
-        total_norm = torch.nn.utils.clip_grad_norm_(
-            [p for p in self.policy_model.parameters() if p.requires_grad],
-            max_norm=1.0,
-        )
-
-        self.optimizer.step()
-        self.lr_scheduler.step()
-        self.optimizer.zero_grad()
-
-        # Metrics
+        # Metrics (grad_norm and lr added by train() after the optimizer step)
         metrics = {
             **loss_dict,
             "reward_mean": rewards.mean().item(),
@@ -584,8 +610,6 @@ class GRPOTrainer:
             "reward_len": sum(d["length"] for d in reward_details) / max(len(reward_details), 1),
             "reward_style": sum(d["style"] for d in reward_details) / max(len(reward_details), 1),
             "advantage_mean": advantages.mean().item(),
-            "grad_norm": total_norm,
-            "lr": self.lr_scheduler.get_last_lr()[0],
         }
         return metrics
 
@@ -647,12 +671,16 @@ class GRPOTrainer:
         logger.info("Starting GRPO training...")
         self.policy_model.train()
 
-        # Progress bar
         total_steps = self.cfg.total_steps
-        progress_bar = tqdm(total=total_steps, desc="GRPO", disable=not self.accelerator.is_main_process)
+        grad_accum = max(1, self.cfg.gradient_accumulation_steps)
+        progress_bar = tqdm(total=total_steps, desc="GRPO", disable=not self.accelerator.is_main_process,
+                            initial=self.global_step)
+
+        # Accumulators for gradient accumulation
+        _accum_step = 0
+        _accum_metrics: List[Dict] = []
 
         while self.global_step < total_steps:
-            # Create dataloader each epoch (shuffled)
             dataloader = DataLoader(
                 self.train_dataset,
                 batch_size=self.cfg.per_device_train_batch_size,
@@ -666,37 +694,59 @@ class GRPOTrainer:
                 if self.global_step >= total_steps:
                     break
 
-                # Training step
+                # Accumulate gradients
                 metrics = self.train_step(batch)
+                _accum_metrics.append(metrics)
+                _accum_step += 1
+
+                if _accum_step % grad_accum != 0:
+                    continue  # accumulate more gradients before stepping
+
+                # Gradient clipping + optimizer step
+                total_norm = torch.nn.utils.clip_grad_norm_(
+                    [p for p in self.policy_model.parameters() if p.requires_grad],
+                    max_norm=1.0,
+                )
+                self.optimizer.step()
+                self.lr_scheduler.step()
+                self.optimizer.zero_grad()
+
                 self.global_step += 1
                 progress_bar.update(1)
+
+                # Average metrics across accumulation sub-steps
+                avg = {k: sum(m[k] for m in _accum_metrics) / len(_accum_metrics)
+                       for k in _accum_metrics[0]}
+                avg["grad_norm"] = total_norm.item() if torch.is_tensor(total_norm) else float(total_norm)
+                avg["lr"] = self.lr_scheduler.get_last_lr()[0]
+                _accum_metrics = []
 
                 # Logging
                 if self.global_step % self.cfg.logging_steps == 0 and self.accelerator.is_main_process:
                     log_msg = (
                         f"Step {self.global_step}/{total_steps} | "
-                        f"Loss: {metrics['loss']:.4f} | "
-                        f"R_mean: {metrics['reward_mean']:.4f} | "
-                        f"R_acc: {metrics['reward_acc']:.4f} | "
-                        f"R_len: {metrics['reward_len']:.4f} | "
-                        f"R_style: {metrics['reward_style']:.4f} | "
-                        f"KL: {metrics['kl']:.4f} | "
-                        f"LR: {metrics['lr']:.2e}"
+                        f"Loss: {avg['loss']:.4f} | "
+                        f"R_mean: {avg['reward_mean']:.4f} | "
+                        f"R_acc: {avg['reward_acc']:.4f} | "
+                        f"R_len: {avg['reward_len']:.4f} | "
+                        f"R_style: {avg['reward_style']:.4f} | "
+                        f"KL: {avg['kl']:.4f} | "
+                        f"LR: {avg['lr']:.2e}"
                     )
                     logger.info(log_msg)
                     self.metrics_tracker.log_train(
                         step=self.global_step,
-                        loss=metrics["loss"],
-                        policy_loss=metrics["policy_loss"],
-                        kl=metrics["kl"],
-                        reward_mean=metrics["reward_mean"],
-                        reward_std=metrics["reward_std"],
-                        reward_acc=metrics["reward_acc"],
-                        reward_len=metrics["reward_len"],
-                        reward_style=metrics["reward_style"],
-                        advantage_mean=metrics["advantage_mean"],
-                        grad_norm=metrics["grad_norm"],
-                        lr=metrics["lr"],
+                        loss=avg["loss"],
+                        policy_loss=avg["policy_loss"],
+                        kl=avg["kl"],
+                        reward_mean=avg["reward_mean"],
+                        reward_std=avg["reward_std"],
+                        reward_acc=avg["reward_acc"],
+                        reward_len=avg["reward_len"],
+                        reward_style=avg["reward_style"],
+                        advantage_mean=avg["advantage_mean"],
+                        grad_norm=avg["grad_norm"],
+                        lr=avg["lr"],
                     )
 
                 # Save checkpoint
@@ -759,6 +809,8 @@ if __name__ == "__main__":
     parser.add_argument("--run_name", type=str, default=None)
     parser.add_argument("--train_data", type=str, default="data/grpo_train.jsonl")
     parser.add_argument("--val_data", type=str, default="data/grpo_val.jsonl")
+    parser.add_argument("--resume", type=str, default=None,
+                        help="Path to checkpoint directory to resume from (e.g. models/grpo_checkpoints/checkpoint-500)")
     args = parser.parse_args()
 
     cfg = GRPOConfig(
@@ -780,5 +832,5 @@ if __name__ == "__main__":
                 if hasattr(cfg, k):
                     setattr(cfg, k, v)
 
-    trainer = GRPOTrainer(cfg)
+    trainer = GRPOTrainer(cfg, resume_from_checkpoint=args.resume)
     trainer.train()

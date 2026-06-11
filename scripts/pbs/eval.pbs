@@ -71,7 +71,7 @@ fi
 
 echo ">>> Starting evaluation..."
 # shellcheck disable=SC2086
-PYTHONPATH="${SRC_PATH}" python launch_eval.py ${_ARGS}
+PYTHONPATH="${SRC_PATH}" python scripts/launch/eval.py ${_ARGS}
 
 _EVAL_END=$(date +%s)
 _EVAL_DURATION=$((_EVAL_END - _EVAL_START))

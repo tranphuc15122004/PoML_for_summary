@@ -73,7 +73,7 @@ if [ -n "${OUTPUT_DIR}" ]; then
     _LAUNCH_ARGS="${_LAUNCH_ARGS} --output_dir ${OUTPUT_DIR}"
 fi
 # shellcheck disable=SC2086
-python launch_sft_no_aug.py ${_LAUNCH_ARGS}
+python scripts/launch/sft_no_aug.py ${_LAUNCH_ARGS}
 _STEP_END=$(date +%s)
 echo "  ✓ SFT training: $((_STEP_END - _STEP_START))s"
 

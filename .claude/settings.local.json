@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(python *)",
-      "Read(//scratch/jp09/dd9648/PoML_for_summary/logs/**)"
+      "Read(//scratch/jp09/dd9648/PoML_for_summary/logs/**)",
+      "Bash(pip show *)"
     ]
   }
 }
