@@ -227,7 +227,7 @@ class VietNewsDataset(BaseSummarizationDataset):
     def data_dir(self) -> str:
         return self._resolve_path(
             self.config.data_root,
-            "vietnews-master/data",
+            "vietnews-master/vietnews-master/data",
             self.SPLIT_MAP[self.split],
         )
 
@@ -311,7 +311,7 @@ class WikiLinguaDataset(BaseSummarizationDataset):
     def file_path(self) -> str:
         return self._resolve_path(
             self.config.data_root,
-            "wikilingua",
+            "wikilingua/wikilingua",
             self.SPLIT_MAP[self.split],
         )
 
@@ -371,7 +371,7 @@ class ViMsDataset(BaseSummarizationDataset):
     def _base_dir(self) -> str:
         return self._resolve_path(
             self.config.data_root,
-            "ViMs-Dataset-master/ViMs",
+            "ViMs-Dataset-master/ViMs-Dataset-master/ViMs/ViMs",
         )
 
     def _raw_samples(self) -> Iterator[Dict[str, str]]:
@@ -510,7 +510,7 @@ class VLSPDataset(BaseSummarizationDataset):
     @property
     def file_path(self) -> str:
         return self._resolve_path(
-            self.config.data_root, "vlsp", self.SPLIT_MAP[self.split]
+            self.config.data_root, "vlsp/vlsp", self.SPLIT_MAP[self.split]
         )
 
     def _raw_samples(self) -> Iterator[Dict[str, str]]:

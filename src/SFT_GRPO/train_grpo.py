@@ -5,7 +5,6 @@ GRPO (Group Relative Policy Optimization) for Vietnamese summarization.
 Optimizes the SFT model using multi-objective rewards:
     - Accuracy (ROUGE-L F1)
     - Length adherence
-    - Style adherence (LLM-as-Judge)
 
 Usage:
     python src/SFT_GRPO/train_grpo.py
@@ -31,13 +30,13 @@ if "triton.ops" not in sys.modules:
 import json
 import logging
 import os
+import time
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 import torch.nn.functional as F
 from accelerate import Accelerator
-from datasets import Dataset as HFDataset, load_dataset
 from torch.utils.data import DataLoader, Dataset
 from tqdm.auto import tqdm
 from transformers import (
@@ -104,6 +103,126 @@ def build_device_map(accelerator: Accelerator) -> str:
 
 
 # ==============================================================================
+# Batch size calibration (tự động dò VRAM)
+# ==============================================================================
+
+def calibrate_grpo_batch_size(
+    policy_model,
+    ref_model,
+    tokenizer,
+    num_generations: int = 4,
+    max_seq_length: int = 3072,
+    max_new_tokens: int = 256,
+    target_fraction: float = 0.90,
+    effective_batch: int = 16,
+) -> tuple:
+    """Dò VRAM để tìm batch size tối ưu cho GRPO.
+
+    GRPO cần memory cho:
+      - Policy model (trainable, forward + backward)
+      - Reference model (frozen, forward only)
+      - Rollout: K× batch sinh tokens (generate)
+      - Optimizer states (AdamW: 2 × fp32 per trainable param)
+
+    Chiến lược: probe với 1 prompt, đo peak memory, ngoại suy tuyến tính.
+
+    Returns:
+        (per_device_batch_size, gradient_accumulation_steps)
+    """
+    import gc
+
+    if not torch.cuda.is_available():
+        logger.warning("[Calibration] No CUDA device — skipping")
+        return 1, effective_batch
+
+    props = torch.cuda.get_device_properties(0)
+    total_vram = props.total_memory
+    target_bytes = int(total_vram * target_fraction)
+
+    # Optimizer states (AdamW): 2 × fp32 states per trainable param
+    optimizer_mem = sum(
+        2 * p.numel() * 4
+        for p in policy_model.parameters() if p.requires_grad
+    )
+
+    logger.info(
+        f"[Calibration] {props.name} ({total_vram/1e9:.1f} GB) | "
+        f"target={target_fraction*100:.0f}% ({target_bytes/1e9:.1f} GB) | "
+        f"optimizer≈{optimizer_mem/1e9:.2f} GB | "
+        f"num_gen={num_generations}"
+    )
+
+    was_training = policy_model.training
+    policy_model.train()
+    ref_model.eval()
+
+    def _probe_prompt(batch_size: int) -> int:
+        """Probe peak VRAM for one train step with batch_size prompts."""
+        torch.cuda.empty_cache()
+        gc.collect()
+        torch.cuda.reset_peak_memory_stats()
+
+        # Create dummy prompt tokens
+        prompt_ids = torch.randint(100, 2000, (batch_size, 256), device="cuda")
+        prompt_mask = torch.ones_like(prompt_ids)
+
+        # Rollout: generate (giả lập bằng forward + tạo thêm tokens)
+        gen_len = min(max_new_tokens, 64)  # probe với gen ngắn
+        dummy_gen = torch.randint(100, 2000, (batch_size * num_generations, gen_len), device="cuda")
+        full_ids = torch.cat([prompt_ids.repeat_interleave(num_generations, dim=0), dummy_gen], dim=-1)
+        full_mask = torch.ones_like(full_ids)
+
+        # Forward reference model
+        with torch.no_grad():
+            ref_model(input_ids=full_ids, attention_mask=full_mask)
+
+        # Forward + backward policy model
+        outputs = policy_model(input_ids=full_ids, attention_mask=full_mask)
+        loss = outputs.logits.mean()
+        loss.backward()
+
+        policy_model.zero_grad(set_to_none=True)
+        peak = torch.cuda.max_memory_allocated()
+
+        del prompt_ids, prompt_mask, dummy_gen, full_ids, full_mask, outputs, loss
+        torch.cuda.empty_cache()
+        gc.collect()
+        return peak
+
+    try:
+        mem_1 = _probe_prompt(1)
+    except RuntimeError as exc:
+        logger.warning(f"[Calibration] Probe failed ({exc}) — keeping default batch size")
+        if not was_training:
+            policy_model.eval()
+        return 1, effective_batch
+    finally:
+        if not was_training:
+            policy_model.eval()
+
+    # Ngoại suy: mem(batch=1) = fixed_overhead + per_prompt
+    # Với GRPO, per_prompt scaling không hoàn toàn tuyến tính do generate,
+    # nhưng dùng linear approximation. Thêm hệ số an toàn 0.85.
+    safety = 0.85
+    per_prompt = mem_1 * 0.6  # ước lượng: ~60% của mem_1 là per-prompt chi phí
+    overhead = mem_1 - per_prompt
+
+    available = target_bytes - overhead - optimizer_mem
+    optimal_batch = max(1, int(available / max(per_prompt, 1) * safety))
+    grad_accum = max(1, round(effective_batch / optimal_batch))
+
+    logger.info(
+        f"[Calibration] overhead≈{overhead/1e9:.2f} GB | "
+        f"per_prompt≈{per_prompt/1e9:.3f} GB | "
+        f"available={available/1e9:.2f} GB | "
+        f"→ batch={optimal_batch} × grad_accum={grad_accum} "
+        f"(eff={optimal_batch * grad_accum}, target={effective_batch})"
+    )
+
+    return optimal_batch, grad_accum
+
+
+# ==============================================================================
 # GRPO Trainer
 # ==============================================================================
 
@@ -112,7 +231,7 @@ class GRPOTrainer:
 
     Implements the GRPO algorithm:
         1. Rollout: sample K completions per prompt from π_θ
-        2. Reward: compute R_total = w_acc·R_acc + w_len·R_len + w_style·R_style
+        2. Reward: compute R_total = w_acc·R_acc + w_len·R_len
         3. Advantage: A = (R − μ_group) / σ_group
         4. Policy gradient: L = -min(ρ·A, clip(ρ)·A) + β·KL
     """
@@ -131,6 +250,10 @@ class GRPOTrainer:
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
+        # Decoder-only models need left padding for generation
+        if self.tokenizer.padding_side != 'left':
+            logger.info(f"Setting tokenizer.padding_side from '{self.tokenizer.padding_side}' to 'left'")
+            self.tokenizer.padding_side = 'left'
 
         # Load policy model (trainable) and reference model (frozen)
         self.policy_model = self._load_policy_model(resume_checkpoint=resume_from_checkpoint)
@@ -141,6 +264,25 @@ class GRPOTrainer:
         self.val_dataset = None
         if cfg.val_data_path and os.path.isfile(cfg.val_data_path):
             self.val_dataset = GRPODataset(cfg.val_data_path)
+
+        # Auto-calibrate batch size dựa trên VRAM (tương tự SFT)
+        if self.accelerator.is_main_process and cfg.auto_calibrate_batch and torch.cuda.is_available():
+            cal_batch, cal_accum = calibrate_grpo_batch_size(
+                self.policy_model,
+                self.ref_model,
+                self.tokenizer,
+                num_generations=cfg.num_generations,
+                max_seq_length=cfg.max_seq_length,
+                max_new_tokens=cfg.max_new_tokens,
+                target_fraction=cfg.calibrate_target_vram_fraction,
+                effective_batch=cfg.calibrate_effective_batch,
+            )
+            logger.info(
+                f"[Calibration] batch: {cfg.per_device_train_batch_size} → {cal_batch} | "
+                f"grad_accum: {cfg.gradient_accumulation_steps} → {cal_accum}"
+            )
+            cfg.per_device_train_batch_size = cal_batch
+            cfg.gradient_accumulation_steps = cal_accum
 
         # Optimizer (LoRA params only)
         self.optimizer = torch.optim.AdamW(
@@ -313,58 +455,6 @@ class GRPOTrainer:
         return gen_ids, generated_texts, logprobs_list
 
     # ------------------------------------------------------------------
-    # KL divergence computation
-    # ------------------------------------------------------------------
-
-    @torch.no_grad()
-    def _compute_kl(
-        self,
-        prompt_ids: torch.Tensor,
-        gen_ids: torch.Tensor,
-    ) -> torch.Tensor:
-        """Compute unbiased KL between policy and reference model.
-
-        KL = exp(log π_ref − log π_θ) - (log π_ref − log π_θ) - 1
-
-        Args:
-            prompt_ids: Tokenized prompts [B, prompt_len]
-            gen_ids: Generated completion token ids [B*K, gen_len]
-
-        Returns:
-            Mean KL per batch.
-        """
-        full_input_ids = torch.cat([prompt_ids, gen_ids], dim=-1)
-        attention_mask = torch.ones_like(full_input_ids)
-
-        with torch.no_grad():
-            ref_outputs = self.ref_model(
-                input_ids=full_input_ids,
-                attention_mask=attention_mask,
-            )
-            ref_logits = ref_outputs.logits  # [B, seq_len, vocab]
-
-        # Policy logits (with gradients)
-        policy_outputs = self.policy_model(
-            input_ids=full_input_ids,
-            attention_mask=attention_mask,
-        )
-        policy_logits = policy_outputs.logits
-
-        # Only compute KL on generated tokens
-        prompt_len = prompt_ids.shape[1]
-        gen_logprobs_ref = F.log_softmax(ref_logits[:, prompt_len - 1 : -1], dim=-1)
-        gen_logprobs_policy = F.log_softmax(policy_logits[:, prompt_len - 1 : -1], dim=-1)
-
-        gen_tokens = full_input_ids[:, prompt_len:]
-        logp_ref = gen_logprobs_ref.gather(dim=-1, index=gen_tokens.unsqueeze(-1)).squeeze(-1)
-        logp_policy = gen_logprobs_policy.gather(dim=-1, index=gen_tokens.unsqueeze(-1)).squeeze(-1)
-
-        # Unbiased KL estimator: exp(r) - r - 1 where r = logp_ref - logp_policy
-        r = logp_ref - logp_policy.detach()  # detach policy for stable KL
-        kl = torch.exp(r) - r - 1
-        return kl.mean()
-
-    # ------------------------------------------------------------------
     # GRPO loss
     # ------------------------------------------------------------------
 
@@ -450,7 +540,7 @@ class GRPOTrainer:
             ref = references[i]
             meta = meta_list[i]
             length_req = meta.get("length_requirement", "khoảng 50 từ")
-            style = meta.get("style", "báo chí")
+            sent_req = meta.get("sentence_requirement", None)
 
             for k in range(num_gen):
                 idx = i * num_gen + k
@@ -460,35 +550,15 @@ class GRPOTrainer:
                     generated=gen,
                     reference=ref if ref else gen,  # fallback if no reference
                     length_requirement=length_req,
-                    style=style,
-                    judge_pipeline=self._style_judge if self.cfg.reward_weight_style > 0 else None,
+                    sentence_requirement=sent_req,
                     w_acc=self.cfg.reward_weight_accuracy,
                     w_len=self.cfg.reward_weight_length,
-                    w_style=self.cfg.reward_weight_style,
+                    w_sent=self.cfg.reward_weight_sentence,
                 )
                 rewards[idx] = reward_dict["total"]
                 details_list.append(reward_dict)
 
         return rewards, details_list
-
-    def _style_judge(self, prompt: str, max_tokens: int = 5) -> List[Dict]:
-        """LLM-as-Judge for style evaluation.
-
-        Uses the reference model (frozen) to score style adherence.
-        """
-        inputs = self.tokenizer(prompt, return_tensors="pt", truncation=True).to(
-            self.accelerator.device
-        )
-        with torch.no_grad():
-            outputs = self.ref_model.generate(
-                **inputs,
-                max_new_tokens=max_tokens,
-                temperature=0.3,
-                do_sample=False,
-                pad_token_id=self.tokenizer.pad_token_id,
-            )
-        text = self.tokenizer.decode(outputs[0][inputs.input_ids.shape[1]:], skip_special_tokens=True)
-        return [{"generated_text": text}]
 
     # ------------------------------------------------------------------
     # Training step
@@ -535,10 +605,21 @@ class GRPOTrainer:
         # Reshape: [B, K]
         rewards_2d = rewards.view(batch_size, num_gen)
 
-        # 3. ADVANTAGE: group normalization
+        # 3. ADVANTAGE: group normalization + length scaling
         mean_rewards = rewards_2d.mean(dim=-1, keepdim=True)  # [B, 1]
         std_rewards = rewards_2d.std(dim=-1, keepdim=True) + 1e-8  # [B, 1]
         advantages_2d = (rewards_2d - mean_rewards) / std_rewards  # [B, K]
+
+        # Scale advantage by length reward: sequences that hit the target length
+        # get a stronger gradient signal — (1 + alpha * R_len) amplifier.
+        if self.cfg.length_advantage_alpha > 0.0:
+            len_rewards = torch.tensor(
+                [d["length"] for d in reward_details],
+                device=self.accelerator.device,
+            ).view(batch_size, num_gen)  # [B, K]
+            length_scale = 1.0 + self.cfg.length_advantage_alpha * len_rewards
+            advantages_2d = advantages_2d * length_scale
+
         advantages = advantages_2d.flatten()  # [B*K]
 
         # 4. Compute new logprobs (with gradients) and KL
@@ -551,8 +632,9 @@ class GRPOTrainer:
         ).to(self.accelerator.device)
 
         # Compute new logprobs for generated tokens
+        gen_mask = torch.ones(gen_ids.shape, dtype=torch.long, device=self.accelerator.device)
         full_ids = torch.cat([prompt_encodings.input_ids, gen_ids], dim=-1)
-        attention_mask = torch.ones_like(full_ids)
+        attention_mask = torch.cat([prompt_encodings.attention_mask, gen_mask], dim=-1)
 
         outputs = self.policy_model(
             input_ids=full_ids,
@@ -602,14 +684,16 @@ class GRPOTrainer:
         self.accelerator.backward(loss)
 
         # Metrics (grad_norm and lr added by train() after the optimizer step)
+        mean_len_reward = sum(d["length"] for d in reward_details) / max(len(reward_details), 1)
         metrics = {
             **loss_dict,
             "reward_mean": rewards.mean().item(),
             "reward_std": rewards.std().item(),
             "reward_acc": sum(d["accuracy"] for d in reward_details) / max(len(reward_details), 1),
-            "reward_len": sum(d["length"] for d in reward_details) / max(len(reward_details), 1),
-            "reward_style": sum(d["style"] for d in reward_details) / max(len(reward_details), 1),
+            "reward_len": mean_len_reward,
+            "reward_sent": sum(d.get("sentence", 0.0) for d in reward_details) / max(len(reward_details), 1),
             "advantage_mean": advantages.mean().item(),
+            "len_scale_mean": 1.0 + self.cfg.length_advantage_alpha * mean_len_reward,
         }
         return metrics
 
@@ -649,11 +733,10 @@ class GRPOTrainer:
                         generated=gen,
                         reference=ref if ref else gen,
                         length_requirement=meta.get("length_requirement", "khoảng 50 từ"),
-                        style=meta.get("style", "báo chí"),
-                        judge_pipeline=self._style_judge if self.cfg.reward_weight_style > 0 else None,
+                        sentence_requirement=meta.get("sentence_requirement", None),
                         w_acc=self.cfg.reward_weight_accuracy,
                         w_len=self.cfg.reward_weight_length,
-                        w_style=self.cfg.reward_weight_style,
+                        w_sent=self.cfg.reward_weight_sentence,
                     )
                     total_rewards.append(rd["total"])
 
@@ -661,6 +744,91 @@ class GRPOTrainer:
 
         mean_reward = sum(total_rewards) / max(len(total_rewards), 1)
         return {"val_reward": mean_reward, "val_samples": len(total_rewards)}
+
+    # ------------------------------------------------------------------
+    # Checkpoint saving (model + optimizer + scheduler + metadata)
+    # ------------------------------------------------------------------
+
+    def _save_checkpoint(self, step: int) -> str:
+        """Save full training state to a checkpoint directory."""
+        checkpoint_dir = os.path.join(self.cfg.output_dir, f"checkpoint-{step}")
+        os.makedirs(checkpoint_dir, exist_ok=True)
+
+        # Model weights (LoRA adapter)
+        self.accelerator.unwrap_model(self.policy_model).save_pretrained(checkpoint_dir)
+
+        # Optimizer & scheduler state
+        torch.save({
+            "optimizer": self.optimizer.state_dict(),
+            "lr_scheduler": self.lr_scheduler.state_dict(),
+            "global_step": step,
+            "best_val_reward": self.best_val_reward,
+        }, os.path.join(checkpoint_dir, "training_state.pt"))
+
+        # Config snapshot
+        with open(os.path.join(checkpoint_dir, "config.json"), "w") as f:
+            json.dump(self.cfg.__dict__, f, default=str, indent=2)
+
+        # Training metrics snapshot
+        if self.metrics_tracker is not None:
+            import shutil
+            metrics_dir = self.metrics_tracker.metrics_dir
+            if os.path.isdir(metrics_dir):
+                shutil.copytree(metrics_dir, os.path.join(checkpoint_dir, "metrics"),
+                                dirs_exist_ok=True)
+
+        logger.info(f"Checkpoint saved: {checkpoint_dir} (step {step})")
+        return checkpoint_dir
+
+    # ------------------------------------------------------------------
+    # Sample generation logging (log một vài summary mẫu ra file)
+    # ------------------------------------------------------------------
+
+    @torch.no_grad()
+    def _log_sample_generations(self, val_metrics: Dict) -> None:
+        """Generate và log một vài mẫu tóm tắt để kiểm tra chất lượng."""
+        if not self.val_dataset or len(self.val_dataset) == 0:
+            return
+
+        # Lấy 3 mẫu đầu tiên từ val set
+        val_samples = [self.val_dataset[i] for i in range(min(3, len(self.val_dataset)))]
+
+        log_entries = []
+        for sample in val_samples:
+            prompt_text = self.tokenizer.apply_chat_template(
+                sample["prompt"], tokenize=False, add_generation_prompt=True
+            )
+            inputs = self.tokenizer(prompt_text, return_tensors="pt", truncation=True,
+                                    max_length=self.cfg.max_seq_length - self.cfg.max_new_tokens).to(
+                self.accelerator.device
+            )
+            output_ids = self.policy_model.generate(
+                **inputs,
+                max_new_tokens=self.cfg.max_new_tokens,
+                temperature=0.3,
+                do_sample=False,
+                pad_token_id=self.tokenizer.pad_token_id,
+                eos_token_id=self.tokenizer.eos_token_id,
+            )
+            prompt_len = inputs.input_ids.shape[1]
+            generated = self.tokenizer.decode(output_ids[0][prompt_len:], skip_special_tokens=True)
+
+            log_entries.append({
+                "reference": sample["reference"][:200],
+                "generated": generated[:200],
+                "length_req": sample["meta"].get("length_requirement", ""),
+                "sent_req": sample["meta"].get("sentence_requirement", ""),
+            })
+
+        # Ghi vào file JSONL
+        samples_log_dir = os.path.join(self.cfg.output_dir, "sample_generations")
+        os.makedirs(samples_log_dir, exist_ok=True)
+        log_file = os.path.join(samples_log_dir, f"step_{self.global_step}.jsonl")
+        with open(log_file, "w", encoding="utf-8") as f:
+            for entry in log_entries:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+        logger.info(f"Sample generations saved: {log_file}")
 
     # ------------------------------------------------------------------
     # Main training loop
@@ -679,6 +847,7 @@ class GRPOTrainer:
         # Accumulators for gradient accumulation
         _accum_step = 0
         _accum_metrics: List[Dict] = []
+        _step_start = time.time()
 
         while self.global_step < total_steps:
             dataloader = DataLoader(
@@ -719,6 +888,12 @@ class GRPOTrainer:
                        for k in _accum_metrics[0]}
                 avg["grad_norm"] = total_norm.item() if torch.is_tensor(total_norm) else float(total_norm)
                 avg["lr"] = self.lr_scheduler.get_last_lr()[0]
+
+                # Step time tracking
+                step_time = time.time() - _step_start
+                avg["step_time_s"] = step_time
+                remaining = (total_steps - self.global_step) * step_time
+                avg["eta_s"] = remaining
                 _accum_metrics = []
 
                 # Logging
@@ -729,13 +904,17 @@ class GRPOTrainer:
                         f"R_mean: {avg['reward_mean']:.4f} | "
                         f"R_acc: {avg['reward_acc']:.4f} | "
                         f"R_len: {avg['reward_len']:.4f} | "
-                        f"R_style: {avg['reward_style']:.4f} | "
+                        f"R_sent: {avg['reward_sent']:.4f} | "
+                        f"LenScale: {avg['len_scale_mean']:.3f} | "
                         f"KL: {avg['kl']:.4f} | "
-                        f"LR: {avg['lr']:.2e}"
+                        f"Grad: {avg['grad_norm']:.4f} | "
+                        f"LR: {avg['lr']:.2e} | "
+                        f"{step_time:.1f}s/step"
                     )
                     logger.info(log_msg)
                     self.metrics_tracker.log_train(
                         step=self.global_step,
+                        total_steps=total_steps,
                         loss=avg["loss"],
                         policy_loss=avg["policy_loss"],
                         kl=avg["kl"],
@@ -743,20 +922,39 @@ class GRPOTrainer:
                         reward_std=avg["reward_std"],
                         reward_acc=avg["reward_acc"],
                         reward_len=avg["reward_len"],
-                        reward_style=avg["reward_style"],
+                        reward_sent=avg["reward_sent"],
                         advantage_mean=avg["advantage_mean"],
+                        len_scale_mean=avg["len_scale_mean"],
                         grad_norm=avg["grad_norm"],
                         lr=avg["lr"],
+                        step_time_s=step_time,
+                        eta_s=remaining,
                     )
 
-                # Save checkpoint
+                    # WandB logging (nếu được bật)
+                    if self.cfg.report_to == "wandb":
+                        try:
+                            import wandb
+                            wandb.log({
+                                "train/loss": avg["loss"],
+                                "train/policy_loss": avg["policy_loss"],
+                                "train/kl": avg["kl"],
+                                "train/reward_mean": avg["reward_mean"],
+                                "train/reward_acc": avg["reward_acc"],
+                                "train/reward_len": avg["reward_len"],
+                                "train/reward_sent": avg["reward_sent"],
+                                "train/advantage_mean": avg["advantage_mean"],
+                                "train/grad_norm": avg["grad_norm"],
+                                "train/lr": avg["lr"],
+                                "train/step_time_s": step_time,
+                                "system/gpu_mem_gb": MetricsTracker._get_gpu_mem(),
+                            }, step=self.global_step)
+                        except Exception:
+                            pass
+
+                # Save checkpoint (model + optimizer + scheduler)
                 if self.global_step % self.cfg.save_steps == 0 and self.accelerator.is_main_process:
-                    checkpoint_dir = os.path.join(self.cfg.output_dir, f"checkpoint-{self.global_step}")
-                    os.makedirs(checkpoint_dir, exist_ok=True)
-                    self.accelerator.unwrap_model(self.policy_model).save_pretrained(checkpoint_dir)
-                    with open(os.path.join(checkpoint_dir, "config.json"), "w") as f:
-                        json.dump(self.cfg.__dict__, f, default=str, indent=2)
-                    logger.info(f"Checkpoint saved: {checkpoint_dir}")
+                    self._save_checkpoint(self.global_step)
 
                 # Validation
                 if (
@@ -771,20 +969,64 @@ class GRPOTrainer:
                         val_reward=val_metrics["val_reward"],
                         val_samples=val_metrics["val_samples"],
                     )
+
+                    # Log generated summaries mẫu
+                    self._log_sample_generations(val_metrics)
+
                     if val_metrics["val_reward"] > self.best_val_reward:
                         self.best_val_reward = val_metrics["val_reward"]
                         best_dir = os.path.join(self.cfg.output_dir, "best")
                         os.makedirs(best_dir, exist_ok=True)
                         self.accelerator.unwrap_model(self.policy_model).save_pretrained(best_dir)
+                        # Save optimizer/scheduler state for best model
+                        torch.save({
+                            "optimizer": self.optimizer.state_dict(),
+                            "lr_scheduler": self.lr_scheduler.state_dict(),
+                            "global_step": self.global_step,
+                            "best_val_reward": self.best_val_reward,
+                        }, os.path.join(best_dir, "training_state.pt"))
                         logger.info(f"New best model (reward={self.best_val_reward:.4f})")
+
+                    # WandB eval logging
+                    if self.cfg.report_to == "wandb":
+                        try:
+                            import wandb
+                            wandb.log({
+                                "eval/val_reward": val_metrics["val_reward"],
+                                "eval/val_samples": val_metrics["val_samples"],
+                            }, step=self.global_step)
+                        except Exception:
+                            pass
 
         progress_bar.close()
 
         # Save final
         if self.accelerator.is_main_process:
+            self._save_checkpoint(self.global_step)
+            # Copy checkpoint cuối cùng vào thư mục "final" cho dễ truy cập
             final_dir = os.path.join(self.cfg.output_dir, "final")
             os.makedirs(final_dir, exist_ok=True)
             self.accelerator.unwrap_model(self.policy_model).save_pretrained(final_dir)
+            # Copy training state
+            last_ckpt = os.path.join(self.cfg.output_dir, f"checkpoint-{self.global_step}")
+            if os.path.isdir(last_ckpt):
+                state_file = os.path.join(last_ckpt, "training_state.pt")
+                if os.path.isfile(state_file):
+                    import shutil
+                    shutil.copy2(state_file, os.path.join(final_dir, "training_state.pt"))
+
+            # Ghi training summary
+            summary = {
+                "status": "completed",
+                "total_steps": total_steps,
+                "completed_steps": self.global_step,
+                "best_val_reward": self.best_val_reward,
+                "output_dir": self.cfg.output_dir,
+                "config": self.cfg.__dict__,
+            }
+            with open(os.path.join(self.cfg.output_dir, "training_summary.json"), "w") as f:
+                json.dump(summary, f, default=str, indent=2)
+
             self.metrics_tracker.close()
             logger.info(f"Final model saved: {final_dir}")
             logger.info(f"Metrics saved to: {self.metrics_tracker.metrics_dir}")
@@ -798,6 +1040,9 @@ class GRPOTrainer:
 if __name__ == "__main__":
     import argparse
 
+    def _bool(v):
+        return str(v).lower() in ("true", "1", "yes")
+
     parser = argparse.ArgumentParser(description="GRPO for Vietnamese summarization")
     parser.add_argument("--config", type=str, default=None, help="Path to JSON config")
     parser.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-3B-Instruct")
@@ -810,7 +1055,11 @@ if __name__ == "__main__":
     parser.add_argument("--train_data", type=str, default="data/grpo_train.jsonl")
     parser.add_argument("--val_data", type=str, default="data/grpo_val.jsonl")
     parser.add_argument("--resume", type=str, default=None,
-                        help="Path to checkpoint directory to resume from (e.g. models/grpo_checkpoints/checkpoint-500)")
+                        help="Path to checkpoint directory to resume from")
+    # Hardware flags (used by local/pbs shell scripts)
+    parser.add_argument("--per_device_train_batch_size", type=int, default=None)
+    parser.add_argument("--bf16", type=_bool, default=None)
+    parser.add_argument("--fp16", type=_bool, default=None)
     args = parser.parse_args()
 
     cfg = GRPOConfig(
@@ -828,9 +1077,24 @@ if __name__ == "__main__":
     if args.config:
         with open(args.config) as f:
             overrides = json.load(f)
+            # Apply top-level config overrides
             for k, v in overrides.items():
                 if hasattr(cfg, k):
                     setattr(cfg, k, v)
+            # Apply nested model config overrides (prefixed with 'model_' or direct model attrs)
+            for k, v in overrides.items():
+                if k.startswith("model_") and hasattr(cfg.model, k[6:]):
+                    setattr(cfg.model, k[6:], v)
+                elif hasattr(cfg.model, k):
+                    setattr(cfg.model, k, v)
+
+    # Apply hardware CLI flags (override JSON config if provided)
+    if args.per_device_train_batch_size is not None:
+        cfg.per_device_train_batch_size = args.per_device_train_batch_size
+    if args.bf16 is not None:
+        cfg.bf16 = args.bf16
+    if args.fp16 is not None:
+        cfg.fp16 = args.fp16
 
     trainer = GRPOTrainer(cfg, resume_from_checkpoint=args.resume)
     trainer.train()

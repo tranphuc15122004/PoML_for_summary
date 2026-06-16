@@ -3,7 +3,7 @@
 Three reward components:
     1. R_acc  — Accuracy: ROUGE-L F1 between generated and reference summary
     2. R_len  — Length adherence: how well word count matches prompt requirement
-    3. R_style— Style adherence: LLM-as-Judge evaluation of style matching
+    3. R_sent — Sentence count adherence: how well sentence count matches requirement
 
 Usage:
     from rewards import compute_all_rewards
@@ -12,10 +12,9 @@ Usage:
         generated="Bản tóm tắt...",
         reference="Gold summary...",
         length_requirement="khoảng 50 từ",
-        style="báo chí",
-        judge_pipeline=judge_model,
+        sentence_requirement="khoảng 2 câu",
     )
-    # → {"accuracy": 0.82, "length": 1.0, "style": 0.75, "total": 0.845}
+    # → {"accuracy": 0.82, "length": 1.0, "sentence": 1.0, "total": 0.845}
 """
 
 from __future__ import annotations
@@ -23,8 +22,6 @@ from __future__ import annotations
 import logging
 import re
 from typing import Dict, Optional
-
-import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -204,88 +201,97 @@ def length_reward(generated: str, length_requirement: str) -> float:
 
 
 # ==============================================================================
-# R_style — Style Adherence Reward (LLM-as-Judge)
+# R_sent — Sentence Count Adherence Reward
 # ==============================================================================
 
 
-def style_reward_llm(
-    generated: str,
-    style: str,
-    judge_pipeline,
-    max_retries: int = 2,
-) -> float:
-    """Evaluate style adherence using an LLM judge.
+def _parse_sentence_requirement(
+    sent_req: str,
+) -> tuple[str, float | tuple[float, float] | None]:
+    """Parse a sentence requirement string.
 
-    The judge is prompted to rate the summary on a scale of 1-5 for the
-    requested style. Score is normalized to [0, 1].
+    Args:
+        sent_req: E.g. "khoảng 2 câu", "trong khoảng 1-3 câu", "không quá 3 câu"
+
+    Returns:
+        Tuple of (type, target):
+            - ("exact", target_count)         for "khoảng X câu"
+            - ("range", (lo, hi))              for "trong khoảng lo-hi câu"
+            - ("max", max_count)               for "không quá X câu"
+    """
+    text = sent_req.lower().strip()
+
+    # "trong khoảng {lo}-{hi} câu"
+    m = re.search(r"trong khoảng\s+(\d+)\s*-\s*(\d+)\s*câu", text)
+    if m:
+        return ("range", (float(m.group(1)), float(m.group(2))))
+
+    # "không quá {max} câu"
+    m = re.search(r"không quá\s+(\d+)\s*câu", text)
+    if m:
+        return ("max", float(m.group(1)))
+
+    # "khoảng {target} câu"  (default)
+    m = re.search(r"khoảng\s+(\d+)\s*câu", text)
+    if m:
+        return ("exact", float(m.group(1)))
+
+    # Fallback
+    m = re.search(r"(\d+)", text)
+    if m:
+        return ("exact", float(m.group(1)))
+
+    return ("exact", 1.0)  # default guess
+
+
+def sentence_reward(generated: str, sentence_requirement: str) -> float:
+    """Compute sentence count adherence reward.
+
+    Evaluates how well the generated summary matches the requested number of sentences.
 
     Args:
         generated: Generated summary.
-        style: Requested style, e.g. "hài hước", "báo chí".
-        judge_pipeline: A callable that takes a prompt string and returns
-            generated text. Must implement `judge_pipeline([prompt], max_tokens=5)`.
-        max_retries: Number of retries if judge output is unparseable.
+        sentence_requirement: String like "khoảng 2 câu".
 
     Returns:
-        Score ∈ [0, 1].
+        Reward ∈ [0, 1].
     """
     if not generated:
         return 0.0
 
-    prompt = (
-        f"Trên thang điểm từ 1 đến 5, đánh giá bản tóm tắt sau đây "
-        f"tuân thủ phong cách '{style}' như thế nào?\n"
-        f"1 = Hoàn toàn không phù hợp\n"
-        f"5 = Hoàn toàn phù hợp\n"
-        f"Chỉ trả lời bằng MỘT số nguyên từ 1 đến 5, không kèm giải thích.\n\n"
-        f"Bản tóm tắt:\n{generated}"
-    )
+    # Count sentences by Vietnamese sentence-ending punctuation.
+    # Strip decimal-point numbers first to avoid counting "1.5" as a sentence boundary.
+    cleaned = re.sub(r'\d+\.\d+', '', generated.strip())
+    actual = max(1, len(re.findall(r'[.!?]', cleaned)))
 
-    for attempt in range(max_retries + 1):
-        try:
-            output = judge_pipeline(prompt, max_tokens=5)[0]["generated_text"]
-            # Extract integer from output
-            nums = re.findall(r"\d+", output.strip())
-            if nums:
-                score = int(nums[0])
-                score = max(1, min(5, score))  # clamp
-                return round((score - 1) / 4.0, 4)
-        except Exception as e:
-            if attempt < max_retries:
-                continue
-            logger.warning(f"Style judge failed after {max_retries} retries: {e}")
+    req_type, target = _parse_sentence_requirement(sentence_requirement)
 
-    return 0.5  # neutral fallback
+    if req_type == "exact":
+        # "khoảng X câu" → ±1 sentence tolerance
+        target_sc = int(target)
+        error = abs(actual - target_sc)
+        if error <= 1:
+            return 1.0
+        # Linear decay
+        score = max(0.0, 1.0 - (error - 1) / 2.0)
+        return round(score, 4)
 
+    elif req_type == "range":
+        lo, hi = int(target[0]), int(target[1])
+        if lo <= actual <= hi:
+            return 1.0
+        if actual < lo:
+            return round(max(0.0, actual / lo), 4)
+        return round(max(0.0, hi / actual), 4)
 
-def style_reward_embedding(
-    generated: str,
-    style: str,
-    style_embeddings: Dict[str, np.ndarray],
-    embedding_fn,
-) -> float:
-    """Fallback: Evaluate style via cosine similarity to style prototypes.
+    elif req_type == "max":
+        max_sc = int(target)
+        if actual <= max_sc:
+            return 1.0
+        score = max(0.0, 1.0 - (actual - max_sc) / max(max_sc, 1))
+        return round(score, 4)
 
-    Args:
-        generated: Generated summary.
-        style: Requested style.
-        style_embeddings: Dict of {style: prototype_embedding_vector}.
-        embedding_fn: Callable that takes text → embedding vector.
-
-    Returns:
-        Score ∈ [0, 1], normalized by max score across all styles.
-    """
-    if not generated or style not in style_embeddings:
-        return 0.5
-
-    gen_emb = embedding_fn(generated)
-    target_vec = style_embeddings[style]
-
-    cos_sim = np.dot(gen_emb, target_vec) / (
-        np.linalg.norm(gen_emb) * np.linalg.norm(target_vec) + 1e-8
-    )
-    # Normalize from [-1, 1] to [0, 1]
-    return round(max(0.0, (cos_sim + 1) / 2), 4)
+    return 0.0
 
 
 # ==============================================================================
@@ -297,50 +303,48 @@ def compute_all_rewards(
     generated: str,
     reference: str,
     length_requirement: str,
-    style: str,
-    judge_pipeline=None,
+    sentence_requirement: Optional[str] = None,
     w_acc: float = 0.5,
     w_len: float = 0.3,
-    w_style: float = 0.2,
-    style_embeddings: Optional[Dict] = None,
-    embedding_fn=None,
+    w_sent: float = 0.2,
 ) -> Dict[str, float]:
-    """Compute all three reward components and the weighted total.
+    """Compute reward components and the weighted total.
 
     Args:
         generated: Model-generated summary.
         reference: Gold reference summary.
         length_requirement: E.g. "khoảng 50 từ".
-        style: Requested style.
-        judge_pipeline: LLM pipeline for style evaluation.
+        sentence_requirement: Optional. E.g. "khoảng 2 câu". If None, skipped.
         w_acc: Weight for accuracy reward.
         w_len: Weight for length reward.
-        w_style: Weight for style reward.
-        style_embeddings: Optional precomputed style embeddings.
-        embedding_fn: Optional embedding function for style fallback.
+        w_sent: Weight for sentence reward.
 
     Returns:
-        Dict with keys: accuracy, length, style, total.
+        Dict with keys: accuracy, length, sentence (if applicable), total.
     """
     r_acc = accuracy_reward(generated, reference)
 
     r_len = length_reward(generated, length_requirement)
 
-    if judge_pipeline is not None:
-        r_style = style_reward_llm(generated, style, judge_pipeline)
-    elif style_embeddings is not None and embedding_fn is not None:
-        r_style = style_reward_embedding(generated, style, style_embeddings, embedding_fn)
+    r_sent = sentence_reward(generated, sentence_requirement) if sentence_requirement else 1.0
+
+    # Normalize weights if sentence reward is used
+    if sentence_requirement:
+        r_total = w_acc * r_acc + w_len * r_len + w_sent * r_sent
     else:
-        r_style = 0.5  # default neutral
+        # Fall back to acc + len only (renormalize)
+        total_w = w_acc + w_len
+        r_total = (w_acc * r_acc + w_len * r_len) / total_w if total_w > 0 else 0.0
 
-    r_total = w_acc * r_acc + w_len * r_len + w_style * r_style
-
-    return {
+    result: Dict[str, float] = {
         "accuracy": round(r_acc, 4),
         "length": round(r_len, 4),
-        "style": round(r_style, 4),
         "total": round(r_total, 4),
     }
+    if sentence_requirement:
+        result["sentence"] = round(r_sent, 4)
+
+    return result
 
 
 # ==============================================================================
@@ -368,11 +372,36 @@ if __name__ == "__main__":
         ok = "✓" if abs(got - expected) < 0.01 else "✗"
         print(f"  {req:40s}  actual={len(text.split()):3d}  got={got:.4f}  exp={expected:.4f}  {ok}")
 
-    # Test composite (no judge)
+    # Test sentence reward
+    print("\nR_sent tests:")
+    sent_cases = [
+        ("khoảng 2 câu", "Câu một. Câu hai.", 1.0),
+        ("khoảng 2 câu", "Chỉ một câu thôi.", 1.0),  # ±1 tolerance
+        ("khoảng 2 câu", "A. B. C. D.", 0.5),  # 4 sentences, error=2 → decay to 0.5
+        ("trong khoảng 1-3 câu", "A. B.", 1.0),
+        ("trong khoảng 1-3 câu", "A. B. C. D.", 0.75),  # 4 > 3
+        ("không quá 2 câu", "A.", 1.0),
+        ("không quá 2 câu", "A. B. C.", 0.5),  # 3 > 2
+    ]
+    for req, text, expected in sent_cases:
+        got = sentence_reward(text, req)
+        ok = "✓" if abs(got - expected) < 0.01 else "✗"
+        actual_sents = max(1, len(re.findall(r'[.!?]', text.strip())))
+        print(f"  {req:30s}  actual={actual_sents}  got={got:.4f}  exp={expected:.4f}  {ok}")
+
+    # Test composite with sentence
     result = compute_all_rewards(
+        generated="Trời hôm nay đẹp. Tôi đi dạo.",
+        reference="Hôm nay trời rất đẹp. Tôi đi dạo.",
+        length_requirement="khoảng 5 từ",
+        sentence_requirement="khoảng 2 câu",
+    )
+    print(f"\nComposite (with sentence): {result}")
+
+    # Test composite without sentence (backward compat)
+    result2 = compute_all_rewards(
         generated="Trời hôm nay đẹp.",
         reference="Hôm nay trời rất đẹp.",
         length_requirement="khoảng 5 từ",
-        style="báo chí",
     )
-    print(f"\nComposite: {result}")
+    print(f"Composite (no sentence): {result2}")

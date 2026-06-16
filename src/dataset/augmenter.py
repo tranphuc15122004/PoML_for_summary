@@ -1,15 +1,16 @@
 """
-Data augmentation: inject length & style instructions into raw summarization data.
+Prepare instruction-following data for SFT and prompt-only data for GRPO.
 
-Generates instruction-following chat samples for SFT and prompt-only samples for GRPO,
-with clear train/val/test splits.
+Both SFT and GRPO use the same train splits (overlap is intentional):
+- SFT: chat-format messages with assistant response
+- GRPO: prompt-only (no assistant), model generates completions during training
 
 Usage:
     from dataset.augmenter import PromptAugmenter, build_all_splits
 
     augmenter = PromptAugmenter()
     splits = build_all_splits(augmenter, data_root="VDT_Textsum")
-    splits["sft_train"].save("data/sft_train.jsonl")
+    splits.sft_train.save("data/sft_train.jsonl")
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ import os
 import random
 import sys
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 # Add project root to path
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -44,23 +45,8 @@ from dataset.dataset import (
 logger = logging.getLogger(__name__)
 
 # ==============================================================================
-# Style & Length Configuration
+# Length & Sentence Configuration
 # ==============================================================================
-
-SFT_STYLES: List[str] = [
-    "báo chí",
-    "trang trọng",
-    "học thuật",
-    "ngắn gọn súc tích",
-    "dạng gạch đầu dòng",
-]
-
-GRPO_STYLES: List[str] = SFT_STYLES + [
-    "hài hước",
-    "thân mật",
-    "dành cho trẻ em",
-    "mang tính phản biện",
-]
 
 LENGTH_TEMPLATES: List[str] = [
     # "khoảng X từ" — tolerance ±20% applied in reward
@@ -71,16 +57,27 @@ LENGTH_TEMPLATES: List[str] = [
     "không quá {max} từ",
 ]
 
+SENTENCE_TEMPLATES: List[str] = [
+    # "khoảng X câu" — tolerance ±1 sentence applied in reward
+    "khoảng {target} câu",
+    # "trong khoảng {lo}-{hi} câu"
+    "trong khoảng {lo}-{hi} câu",
+    # "không quá {max} câu"
+    "không quá {max} câu",
+]
+
 SYSTEM_PROMPT_SFT = (
     "Bạn là một trợ lý AI chuyên tóm tắt văn bản tiếng Việt. "
     "Hãy tạo ra bản tóm tắt ngắn gọn, chính xác, "
-    "tuân thủ đúng yêu cầu về độ dài và phong cách."
+    "tuân thủ đúng yêu cầu về độ dài và số câu."
 )
 
-SYSTEM_PROMPT_GRPO = (
-    "Bạn là một trợ lý AI chuyên tóm tắt văn bản tiếng Việt. "
-    "Hãy tạo ra bản tóm tắt chính xác, tuân thủ yêu cầu."
-)
+SYSTEM_PROMPT_GRPO = SYSTEM_PROMPT_SFT
+
+# VietNews targets are newspaper titles. Titles shorter than this threshold
+# tend to be click-bait or too brief to serve as quality SFT reference summaries.
+# GRPO still uses all VietNews (reward signal is length-aware so short titles are fine).
+VIETNEWS_MIN_TARGET_WORDS: int = 10
 
 
 # ==============================================================================
@@ -91,17 +88,8 @@ SYSTEM_PROMPT_GRPO = (
 class PromptAugmenterConfig:
     """Configuration for PromptAugmenter."""
 
-    num_variants: int = 3
-    """Number of instruction variants to generate per raw sample for SFT."""
-
     length_tolerance: float = 0.2
     """Tolerance for 'khoảng X từ' (±20%)."""
-
-    sft_styles: List[str] = field(default_factory=lambda: SFT_STYLES.copy())
-    """Style pool for SFT data."""
-
-    grpo_styles: List[str] = field(default_factory=lambda: GRPO_STYLES.copy())
-    """Style pool for GRPO data."""
 
     system_prompt_sft: str = SYSTEM_PROMPT_SFT
     """System prompt for SFT chat samples."""
@@ -113,16 +101,17 @@ class PromptAugmenterConfig:
 
 
 class PromptAugmenter:
-    """Generate instruction-following variants from raw {source, target} pairs.
+    """Generate instruction-following samples from raw {source, target} pairs.
 
-    For each raw sample, creates N variants with different length requirements
-    and randomly assigned styles. Length requirements are derived from the
-    gold summary's word count (passive strategy).
+    Each raw sample produces exactly one SFT variant and one GRPO prompt.
+    Length/sentence requirements are derived from the gold summary's statistics.
     """
 
     def __init__(self, config: Optional[PromptAugmenterConfig] = None):
         self.config = config or PromptAugmenterConfig()
         self._rng = random.Random(self.config.seed)
+        # Bộ đếm template để luân phiên cho GRPO (tạo đa dạng)
+        self._grpo_template_counter: int = 0
 
     # ------------------------------------------------------------------
     # Length instruction generation
@@ -150,46 +139,66 @@ class PromptAugmenter:
         """Count words in a text (space-delimited for Vietnamese)."""
         return len(text.split())
 
+    def _sentence_count(self, text: str) -> int:
+        """Count sentences by Vietnamese sentence-ending punctuation."""
+        import re
+        count = len(re.findall(r'[.!?]', text.strip()))
+        return max(count, 1)
+
+    def _make_sentence_req(self, sent_count: int, template_idx: int) -> str:
+        """Generate a sentence requirement string from a sentence count."""
+        template = SENTENCE_TEMPLATES[template_idx % len(SENTENCE_TEMPLATES)]
+
+        if template == "khoảng {target} câu":
+            return template.format(target=sent_count)
+
+        elif template == "trong khoảng {lo}-{hi} câu":
+            lo = max(1, sent_count - 1)
+            hi = sent_count + 1
+            return template.format(lo=lo, hi=hi)
+
+        elif template == "không quá {max} câu":
+            max_sents = max(sent_count, sent_count + 1)
+            return template.format(max=max_sents)
+
+        return f"khoảng {sent_count} câu"
+
     # ------------------------------------------------------------------
     # Per-sample augmentation (SFT)
     # ------------------------------------------------------------------
 
-    def augment_sft(self, source: str, target: str) -> List[Dict]:
-        """Generate N SFT variants from one raw sample.
+    def augment_sft(self, source: str, target: str) -> Dict:
+        """Generate one SFT sample from a raw {source, target} pair.
 
-        Each variant is a chat-format dict with system/user/assistant messages.
+        Returns a chat-format dict with system/user/assistant messages.
         """
         wc = self._word_count(target)
-        variants: List[Dict] = []
+        sc = self._sentence_count(target)
+        length_req = self._make_length_req(wc, 0)
+        sent_req = self._make_sentence_req(sc, 0)
 
-        for i in range(self.config.num_variants):
-            length_req = self._make_length_req(wc, i)
-            style = self._rng.choice(self.config.sft_styles)
+        user_content = (
+            f"Yêu cầu:\n"
+            f"- Độ dài: {length_req}\n"
+            f"- Số câu: {sent_req}\n"
+            f"\n"
+            f"Văn bản:\n{source}"
+        )
 
-            user_content = (
-                f"Yêu cầu:\n"
-                f"- Độ dài: {length_req}\n"
-                f"- Phong cách: {style}\n"
-                f"\n"
-                f"Văn bản:\n{source}"
-            )
-
-            variants.append({
-                "messages": [
-                    {"role": "system", "content": self.config.system_prompt_sft},
-                    {"role": "user", "content": user_content},
-                    {"role": "assistant", "content": target},
-                ],
-                # Metadata fields for reward computation / debugging
-                "meta": {
-                    "source_length": self._word_count(source),
-                    "target_length": wc,
-                    "length_requirement": length_req,
-                    "style": style,
-                },
-            })
-
-        return variants
+        return {
+            "messages": [
+                {"role": "system", "content": self.config.system_prompt_sft},
+                {"role": "user", "content": user_content},
+                {"role": "assistant", "content": target},
+            ],
+            "meta": {
+                "source_length": self._word_count(source),
+                "target_length": wc,
+                "target_sentences": sc,
+                "length_requirement": length_req,
+                "sentence_requirement": sent_req,
+            },
+        }
 
     # ------------------------------------------------------------------
     # Per-sample augmentation (GRPO prompt)
@@ -197,26 +206,28 @@ class PromptAugmenter:
 
     def augment_grpo_prompt(
         self, source: str, target: str,
-        style_override: Optional[str] = None,
     ) -> Dict:
-        """Generate ONE prompt for GRPO rollout.
+        """Generate one prompt for GRPO rollout.
 
         GRPO prompts have NO assistant response — the model generates
         multiple completions during training.
 
         Returns:
             Dict with "prompt" (list of messages) and "reference" (gold summary)
-            and "meta" (length/style metadata for reward functions).
+            and "meta" (length/sentence metadata for reward functions).
         """
         wc = self._word_count(target)
-        # Use a random template
-        length_req = self._make_length_req(wc, self._rng.randint(0, 100))
-        style = style_override or self._rng.choice(self.config.grpo_styles)
+        sc = self._sentence_count(target)
+        # Luân phiên template để tạo đa dạng length/sentence requirement
+        template_idx = self._grpo_template_counter
+        self._grpo_template_counter += 1
+        length_req = self._make_length_req(wc, template_idx)
+        sent_req = self._make_sentence_req(sc, template_idx)
 
         user_content = (
             f"Yêu cầu:\n"
             f"- Độ dài: {length_req}\n"
-            f"- Phong cách: {style}\n"
+            f"- Số câu: {sent_req}\n"
             f"\n"
             f"Văn bản:\n{source}"
         )
@@ -230,28 +241,30 @@ class PromptAugmenter:
             "meta": {
                 "source_length": self._word_count(source),
                 "target_length": wc,
+                "target_sentences": sc,
                 "length_requirement": length_req,
-                "style": style,
+                "sentence_requirement": sent_req,
             },
         }
 
     # ------------------------------------------------------------------
-    # Test prompt (no augment, fixed style + length)
+    # Test prompt (no augment, fixed length)
     # ------------------------------------------------------------------
 
     def make_test_prompt(
         self, source: str, target: str,
-        style: str = "báo chí",
         length_template: int = 0,
     ) -> Dict:
         """Generate a fixed test prompt (no randomness)."""
         wc = self._word_count(target)
+        sc = self._sentence_count(target)
         length_req = self._make_length_req(wc, length_template)
+        sent_req = self._make_sentence_req(sc, length_template)
 
         user_content = (
             f"Yêu cầu:\n"
             f"- Độ dài: {length_req}\n"
-            f"- Phong cách: {style}\n"
+            f"- Số câu: {sent_req}\n"
             f"\n"
             f"Văn bản:\n{source}"
         )
@@ -265,8 +278,9 @@ class PromptAugmenter:
             "meta": {
                 "source_length": self._word_count(source),
                 "target_length": wc,
+                "target_sentences": sc,
                 "length_requirement": length_req,
-                "style": style,
+                "sentence_requirement": sent_req,
             },
         }
 
@@ -315,20 +329,39 @@ class DataSplit:
 
 @dataclass
 class AllSplits:
-    """Container for all data splits."""
+    """Container for all data splits.
+
+    Test data được tách riêng theo từng dataset (4 bộ) để
+    evaluation có thể tính metric riêng cho từng bộ.
+    """
 
     sft_train: DataSplit
     sft_val: DataSplit
     grpo_train: DataSplit
     grpo_val: DataSplit
-    test: DataSplit
+    test_vietnews: DataSplit
+    test_wikilingua: DataSplit
+    test_vlsp: DataSplit
+    test_vims: DataSplit
+    test: DataSplit  # combined test — used by eval.py default path
 
     def save_all(self, out_dir: str = "data") -> None:
-        """Save all splits to JSONL files."""
+        """Save all splits to JSONL files.
+
+        Test data được lưu thành 4 file riêng theo từng dataset
+        để evaluation có thể thống kê metric theo từng bộ,
+        và một file gộp test.jsonl cho eval.py.
+        """
         self.sft_train.save(os.path.join(out_dir, "sft_train.jsonl"))
         self.sft_val.save(os.path.join(out_dir, "sft_val.jsonl"))
         self.grpo_train.save(os.path.join(out_dir, "grpo_train.jsonl"))
         self.grpo_val.save(os.path.join(out_dir, "grpo_val.jsonl"))
+        # Test files — per dataset
+        self.test_vietnews.save(os.path.join(out_dir, "test_vietnews.jsonl"))
+        self.test_wikilingua.save(os.path.join(out_dir, "test_wikilingua.jsonl"))
+        self.test_vlsp.save(os.path.join(out_dir, "test_vlsp.jsonl"))
+        self.test_vims.save(os.path.join(out_dir, "test_vims.jsonl"))
+        # Combined test — default path for eval.py
         self.test.save(os.path.join(out_dir, "test.jsonl"))
 
 
@@ -356,6 +389,9 @@ def build_all_splits(
 ) -> AllSplits:
     """Build all data splits from raw datasets.
 
+    Cả SFT và GRPO đều dùng **train splits** (có thể overlap dữ liệu).
+    Val chỉ dùng để validation, test để đánh giá cuối cùng.
+
     Args:
         augmenter: PromptAugmenter instance. Creates default if None.
         data_root: Path to VDT_Textsum directory.
@@ -378,23 +414,72 @@ def build_all_splits(
     )
 
     # ------------------------------------------------------------------
-    # 1. SFT TRAIN: VietNews train + WikiLingua train
+    # Train data sources (SFT vs GRPO have different quality requirements)
+    #
+    # SFT:  VietNews (title >= VIETNEWS_MIN_TARGET_WORDS) + WikiLingua + ViMs 80%
+    # GRPO: all VietNews + WikiLingua + VLSP + ViMs 80%
+    # ------------------------------------------------------------------
+    sft_train_raw: List[Dict] = []   # high-quality sources for SFT
+    grpo_train_raw: List[Dict] = []  # all sources for GRPO
+
+    # VietNews: filter short titles for SFT; GRPO uses all
+    logger.info("Loading VietNews/train...")
+    vn_train = VietNewsDataset(raw_cfg, split="train")
+    vn_skipped = 0
+    for i, sample in enumerate(vn_train):
+        grpo_train_raw.append(sample)
+        if len(sample["target"].split()) >= VIETNEWS_MIN_TARGET_WORDS:
+            sft_train_raw.append(sample)
+        else:
+            vn_skipped += 1
+        if (i + 1) % 20000 == 0:
+            logger.info(f"  Loaded {i+1}/{len(vn_train)} VietNews train samples")
+    logger.info(
+        f"  VietNews: {len(vn_train)} total, {vn_skipped} skipped for SFT "
+        f"(title < {VIETNEWS_MIN_TARGET_WORDS} words)"
+    )
+
+    # WikiLingua: high-quality abstractive summaries → both SFT and GRPO
+    logger.info("Loading WikiLingua/train...")
+    wl_train = WikiLinguaDataset(raw_cfg, split="train")
+    for sample in wl_train:
+        sft_train_raw.append(sample)
+        grpo_train_raw.append(sample)
+
+    # VLSP: extractive labels → GRPO only (not suitable as SFT targets)
+    logger.info("Loading VLSP/train...")
+    try:
+        vlsp_train = VLSPDataset(raw_cfg, split="train")
+        for sample in vlsp_train:
+            if sample.get("target"):
+                grpo_train_raw.append(sample)
+    except Exception as e:
+        logger.warning(f"VLSP/train skipped: {e}")
+
+    # ViMs: human-annotated gold summaries → both SFT and GRPO
+    logger.info("Loading ViMs...")
+    vims_samples: List[Dict] = []
+    split_idx = 0
+    try:
+        vims = ViMsDataset(raw_cfg, annotator_idx=0)
+        vims_samples = list(vims)
+        vims_rng = random.Random(42)
+        vims_rng.shuffle(vims_samples)
+        split_idx = int(len(vims_samples) * 0.8)
+        sft_train_raw.extend(vims_samples[:split_idx])
+        grpo_train_raw.extend(vims_samples[:split_idx])
+    except Exception as e:
+        logger.warning(f"ViMs skipped: {e}")
+
+    # ------------------------------------------------------------------
+    # 1. SFT TRAIN: high-quality sources only
     # ------------------------------------------------------------------
     sft_train_samples: List[Dict] = []
-
-    logger.info("Loading VietNews/train for SFT...")
-    vn_train = VietNewsDataset(raw_cfg, split="train")
-    for i, sample in enumerate(vn_train):
-        sft_train_samples.extend(augmenter.augment_sft(sample["source"], sample["target"]))
-        if (i + 1) % 20000 == 0:
-            logger.info(f"  Augmented {i+1}/{len(vn_train)} VietNews train samples")
-
-    logger.info("Loading WikiLingua/train for SFT...")
-    wl_train = WikiLinguaDataset(raw_cfg, split="train")
-    for i, sample in enumerate(wl_train):
-        sft_train_samples.extend(augmenter.augment_sft(sample["source"], sample["target"]))
-        if (i + 1) % 5000 == 0:
-            logger.info(f"  Augmented {i+1}/{len(wl_train)} WikiLingua train samples")
+    for sample in sft_train_raw:
+        sft_train_samples.append(
+            augmenter.augment_sft(sample["source"], sample["target"])
+        )
+    logger.info(f"  SFT train: {len(sft_train_samples)} samples")
 
     # ------------------------------------------------------------------
     # 2. SFT VAL: first 2K VietNews val + first 500 WikiLingua val
@@ -405,71 +490,44 @@ def build_all_splits(
     for i, sample in enumerate(vn_val):
         if i >= 2000:
             break
-        sft_val_samples.extend(augmenter.augment_sft(sample["source"], sample["target"]))
+        sft_val_samples.append(augmenter.augment_sft(sample["source"], sample["target"]))
 
     wl_val = WikiLinguaDataset(raw_cfg, split="val")
     for i, sample in enumerate(wl_val):
         if i >= 500:
             break
-        sft_val_samples.extend(augmenter.augment_sft(sample["source"], sample["target"]))
+        sft_val_samples.append(augmenter.augment_sft(sample["source"], sample["target"]))
 
     # ------------------------------------------------------------------
-    # 3. GRPO TRAIN: remaining VietNews val + remaining WikiLingua val
-    #    + VLSP train + ViMs 80%
+    # 3. GRPO TRAIN: all sources (unfiltered VietNews + VLSP + WikiLingua + ViMs)
     # ------------------------------------------------------------------
     grpo_train_samples: List[Dict] = []
-
-    # Remaining VietNews val (after first 2000 taken for SFT val)
-    for i, sample in enumerate(vn_val):
-        if i < 2000:
-            continue
-        grpo_train_samples.append(augmenter.augment_grpo_prompt(sample["source"], sample["target"]))
-
-    # Remaining WikiLingua val (after first 500 taken for SFT val)
-    for i, sample in enumerate(wl_val):
-        if i < 500:
-            continue
-        grpo_train_samples.append(augmenter.augment_grpo_prompt(sample["source"], sample["target"]))
-
-    # VLSP train (285 samples)
-    logger.info("Loading VLSP/train for GRPO...")
-    try:
-        vlsp_train = VLSPDataset(raw_cfg, split="train")
-        for sample in vlsp_train:
-            if sample["target"]:  # skip empty targets
-                grpo_train_samples.append(
-                    augmenter.augment_grpo_prompt(sample["source"], sample["target"])
-                )
-    except Exception as e:
-        logger.warning(f"VLSP/train skipped: {e}")
-
-    # ViMs 80% (240/300 clusters)
-    logger.info("Loading ViMs for GRPO...")
-    vims_samples: List[Dict] = []
-    split_idx: int = 0
-    try:
-        vims = ViMsDataset(raw_cfg, annotator_idx=0)
-        vims_samples = list(vims)
-        vims_rng = random.Random(42)
-        vims_rng.shuffle(vims_samples)
-        split_idx = int(len(vims_samples) * 0.8)
-        for sample in vims_samples[:split_idx]:
-            grpo_train_samples.append(
-                augmenter.augment_grpo_prompt(sample["source"], sample["target"])
-            )
-    except Exception as e:
-        logger.warning(f"ViMs skipped: {e}")
+    for sample in grpo_train_raw:
+        grpo_train_samples.append(
+            augmenter.augment_grpo_prompt(sample["source"], sample["target"])
+        )
+    logger.info(f"  GRPO train: {len(grpo_train_samples)} samples")
 
     # ------------------------------------------------------------------
-    # 4. GRPO VAL: VLSP val + ViMs 20%
+    # 4. GRPO VAL: remaining VietNews val + remaining WikiLingua val + ViMs 20%
     # ------------------------------------------------------------------
     grpo_val_samples: List[Dict] = []
 
-    # VLSP val (15 samples)
+    for i, sample in enumerate(vn_val):
+        if i < 2000:
+            continue
+        grpo_val_samples.append(augmenter.augment_grpo_prompt(sample["source"], sample["target"]))
+
+    for i, sample in enumerate(wl_val):
+        if i < 500:
+            continue
+        grpo_val_samples.append(augmenter.augment_grpo_prompt(sample["source"], sample["target"]))
+
+    # VLSP val
     try:
         vlsp_val = VLSPDataset(raw_cfg, split="val")
         for sample in vlsp_val:
-            if sample["target"]:
+            if sample.get("target"):
                 grpo_val_samples.append(
                     augmenter.augment_grpo_prompt(sample["source"], sample["target"])
                 )
@@ -483,26 +541,33 @@ def build_all_splits(
         )
 
     # ------------------------------------------------------------------
-    # 5. TEST: VietNews test + WikiLingua test + VLSP test+abmusu
+    # 5. TEST: per-dataset files — VietNews, WikiLingua, VLSP, ViMs
     # ------------------------------------------------------------------
-    test_samples: List[Dict] = []
+    test_vietnews: List[Dict] = []
+    test_wikilingua: List[Dict] = []
+    test_vlsp: List[Dict] = []
+    test_vims: List[Dict] = []
 
-    logger.info("Loading VietNews/test for TEST...")
+    logger.info("Loading VietNews/test...")
     vn_test = VietNewsDataset(raw_cfg, split="test")
     count = 0
     for sample in vn_test:
         if count >= test_size_vn:
             break
-        test_samples.append(augmenter.make_test_prompt(sample["source"], sample["target"]))
+        s = augmenter.make_test_prompt(sample["source"], sample["target"])
+        s["meta"]["dataset"] = "vietnews"
+        test_vietnews.append(s)
         count += 1
 
-    logger.info("Loading WikiLingua/test for TEST...")
+    logger.info("Loading WikiLingua/test...")
     wl_test = WikiLinguaDataset(raw_cfg, split="test")
     count = 0
     for sample in wl_test:
         if count >= test_size_wl:
             break
-        test_samples.append(augmenter.make_test_prompt(sample["source"], sample["target"]))
+        s = augmenter.make_test_prompt(sample["source"], sample["target"])
+        s["meta"]["dataset"] = "wikilingua"
+        test_wikilingua.append(s)
         count += 1
 
     # VLSP test + abmusu
@@ -510,11 +575,25 @@ def build_all_splits(
         try:
             vlsp_test = VLSPDataset(raw_cfg, split=split_name)
             for sample in vlsp_test:
-                test_samples.append(
-                    augmenter.make_test_prompt(sample["source"], sample["target"])
-                )
+                s = augmenter.make_test_prompt(sample["source"], sample["target"])
+                s["meta"]["dataset"] = "vlsp"
+                test_vlsp.append(s)
         except Exception as e:
             logger.warning(f"VLSP/{split_name} skipped: {e}")
+
+    # ViMs — all clusters used for test
+    logger.info("Loading ViMs for TEST...")
+    try:
+        vims_all = ViMsDataset(raw_cfg, annotator_idx=0)
+        for sample in vims_all:
+            s = augmenter.make_test_prompt(sample["source"], sample["target"])
+            s["meta"]["dataset"] = "vims"
+            test_vims.append(s)
+    except Exception as e:
+        logger.warning(f"ViMs test skipped: {e}")
+
+    # Combined test for eval.py default path
+    test_samples = test_vietnews + test_wikilingua + test_vlsp + test_vims
 
     # ------------------------------------------------------------------
     # Summary & return
@@ -524,17 +603,27 @@ def build_all_splits(
         sft_val=DataSplit("sft_val", sft_val_samples),
         grpo_train=DataSplit("grpo_train", grpo_train_samples),
         grpo_val=DataSplit("grpo_val", grpo_val_samples),
+        test_vietnews=DataSplit("test_vietnews", test_vietnews),
+        test_wikilingua=DataSplit("test_wikilingua", test_wikilingua),
+        test_vlsp=DataSplit("test_vlsp", test_vlsp),
+        test_vims=DataSplit("test_vims", test_vims),
         test=DataSplit("test", test_samples),
     )
+
+    test_total = len(test_vietnews) + len(test_wikilingua) + len(test_vlsp) + len(test_vims)
 
     logger.info(
         f"\n{'='*60}\n"
         f"Data splits summary:\n"
-        f"  SFT train:  {len(splits.sft_train):>8,}  (after {augmenter.config.num_variants}x augment)\n"
-        f"  SFT val:    {len(splits.sft_val):>8,}\n"
-        f"  GRPO train: {len(splits.grpo_train):>8,}\n"
-        f"  GRPO val:   {len(splits.grpo_val):>8,}\n"
-        f"  Test:       {len(splits.test):>8,}\n"
+        f"  SFT train:      {len(splits.sft_train):>8,}  (VietNews≥{VIETNEWS_MIN_TARGET_WORDS}w + WikiLingua + ViMs)\n"
+        f"  SFT val:        {len(splits.sft_val):>8,}\n"
+        f"  GRPO train:     {len(splits.grpo_train):>8,}  (all VietNews + WikiLingua + VLSP + ViMs)\n"
+        f"  GRPO val:       {len(splits.grpo_val):>8,}\n"
+        f"  Test — VietNews: {len(test_vietnews):>8,}\n"
+        f"  Test — WikiLingua: {len(test_wikilingua):>8,}\n"
+        f"  Test — VLSP:     {len(test_vlsp):>8,}\n"
+        f"  Test — ViMs:     {len(test_vims):>8,}\n"
+        f"  Test — Total:    {test_total:>8,}  → data/test.jsonl\n"
         f"{'='*60}"
     )
 
@@ -574,11 +663,11 @@ if __name__ == "__main__":
     print(f"System:   {ex['messages'][0]['content'][:80]}...")
     print(f"User:     {ex['messages'][1]['content'][:120]}...")
     print(f"Assist:   {ex['messages'][2]['content'][:80]}...")
-    print(f"Meta:     length_req={ex['meta']['length_requirement']}, style={ex['meta']['style']}")
+    print(f"Meta:     length_req={ex['meta']['length_requirement']}")
 
     print("\n=== GRPO Example ===")
     ex = splits.grpo_train[0]
     print(f"Prompt: {len(ex['prompt'])} messages")
     print(f"  User: {ex['prompt'][1]['content'][:120]}...")
     print(f"  Reference: {ex['reference'][:60]}...")
-    print(f"Meta: length_req={ex['meta']['length_requirement']}, style={ex['meta']['style']}")
+    print(f"Meta: length_req={ex['meta']['length_requirement']}")

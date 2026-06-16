@@ -28,9 +28,8 @@ LOGS_DIR="${PROJECT_ROOT}/logs"
 
 # Overridable via environment variables
 QUICK="${QUICK:-0}"                        # set to 1 for quick test (20 samples)
-FAMILIES="${FAMILIES:-all}"                # all, qwen2.5, qwen3.5
-MODEL_PATHS="${MODEL_PATHS:-}"             # custom "a=path,b=path"
-JUDGE_MODEL="${JUDGE_MODEL:-}"             # override judge model
+FAMILIES="${FAMILIES:-all}"               # all, qwen2.5, qwen3.5
+MODEL_PATHS="${MODEL_PATHS:-}"            # custom "a=path,b=path"
 
 mkdir -p "${LOGS_DIR}"
 cd "${PROJECT_ROOT}"
@@ -64,9 +63,6 @@ elif [ -n "${FAMILIES}" ] && [ "${FAMILIES}" != "all" ]; then
 fi
 if [ -n "${MODEL_PATHS}" ]; then
     _ARGS="${_ARGS} --models \"${MODEL_PATHS}\""
-fi
-if [ -n "${JUDGE_MODEL}" ]; then
-    _ARGS="${_ARGS} --judge_model ${JUDGE_MODEL}"
 fi
 
 echo ">>> Starting evaluation..."

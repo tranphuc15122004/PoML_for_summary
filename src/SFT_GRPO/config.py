@@ -265,14 +265,26 @@ class GRPOConfig:
     dataloader_num_workers: int = 4
     """Parallel data loading workers."""
 
+    # Auto-calibration (tương tự SFT)
+    auto_calibrate_batch: bool = True
+    """Run VRAM probe before training to find the largest batch size
+    that fits within calibrate_target_vram_fraction of GPU memory."""
+    calibrate_target_vram_fraction: float = 0.90
+    """Target VRAM utilisation for calibration (0–1). 0.90 leaves 10% headroom."""
+    calibrate_effective_batch: int = 16
+    """Target effective batch size (batch × grad_accum) for calibration."""
+
     # Reward weights
     reward_weight_accuracy: float = 0.5
     reward_weight_length: float = 0.3
-    reward_weight_style: float = 0.2
+    reward_weight_sentence: float = 0.2
 
-    # Style reward (LLM-as-Judge)
-    judge_model_name: str = "/g/data/hn98/dd9648/models/Qwen2.5-3B-Instruct"
-    """Local path to judge model for style reward (offline cluster)."""
+    # Length-scaled advantage
+    length_advantage_alpha: float = 0.5
+    """Amplification factor for length-correct completions.
+    Advantage is scaled by (1 + alpha * R_len), so sequences that hit the
+    target length get a stronger gradient signal than those that miss it.
+    Set 0.0 to disable. Typical range: 0.3–1.0."""
 
     # Logging & saving
     logging_steps: int = 5

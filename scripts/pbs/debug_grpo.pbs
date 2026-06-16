@@ -1,0 +1,107 @@
+#!/bin/bash
+#PBS -N poml_debug_grpo
+#PBS -q dgxa100
+#PBS -l ncpus=16,ngpus=1,mem=64gb
+#PBS -l walltime=2:00:00
+#PBS -P hn98
+#PBS -l storage=scratch/jp09+gdata/hn98
+#PBS -o /scratch/jp09/dd9648/PoML_for_summary/logs/debug_grpo_%j.out
+#PBS -e /scratch/jp09/dd9648/PoML_for_summary/logs/debug_grpo_%j.err
+#PBS -j oe
+#PBS -m n
+
+# ==============================================================================
+# PoML for Summary — Debug GRPO (smoke test trên HPC)
+# ==============================================================================
+# Chạy 10 steps GRPO để verify pipeline hoạt động trên cluster.
+# Dùng batch_size nhỏ, max_seq_len thấp để tiết kiệm thời gian.
+# ==============================================================================
+
+set -euo pipefail
+
+PROJECT_ROOT="/scratch/jp09/dd9648/PoML_for_summary"
+VENV_PATH="${PROJECT_ROOT}/.venv"
+SRC_PATH="${PROJECT_ROOT}/src"
+LOGS_DIR="${PROJECT_ROOT}/logs"
+LOCAL_MODEL="/g/data/hn98/dd9648/models/Qwen2.5-3B-Instruct"
+OUTPUT_DIR="${PROJECT_ROOT}/models/debug_grpo"
+
+mkdir -p "${LOGS_DIR}" "${OUTPUT_DIR}"
+cd "${PROJECT_ROOT}"
+
+# Auto-detect GPU
+if [ -z "${GPU_MODEL:-}" ]; then
+    _GPU=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)
+    case "${_GPU}" in
+        *H200*|*Hopper*) GPU_MODEL="h200" ;;
+        *A100*)          GPU_MODEL="a100" ;;
+        *)               GPU_MODEL="a100" ;;
+    esac
+fi
+
+case "${GPU_MODEL}" in
+    h200) DTYPE="bf16"; BATCH=4 ;;
+    a100) DTYPE="bf16"; BATCH=2 ;;
+    v100) DTYPE="fp16"; BATCH=1 ;;
+    *)    DTYPE="bf16"; BATCH=4 ;;
+esac
+
+source "${VENV_PATH}/bin/activate"
+export PYTHONPATH="${SRC_PATH}:${PYTHONPATH}"
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+export TOKENIZERS_PARALLELISM=false
+export HF_DATASETS_CACHE="/scratch/jp09/dd9648/.cache/huggingface/datasets"
+mkdir -p "${HF_DATASETS_CACHE}"
+
+echo "=============================================================="
+echo "DEBUG GRPO — Smoke Test"
+echo "Job ID:  ${PBS_JOBID}"
+echo "GPU:     $(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)"
+echo "Model:   ${LOCAL_MODEL}"
+echo "Batch:   ${BATCH}"
+echo "Dtype:   ${DTYPE}"
+echo "Start:   $(date)"
+echo "=============================================================="
+
+# Config cho debug (max_seq_len thấp, ít steps)
+cat > "${LOGS_DIR}/debug_grpo_cfg.json" << EOF
+{
+    "do_sample": true,
+    "temperature": 0.7,
+    "max_new_tokens": 64,
+    "max_seq_length": 1024,
+    "per_device_train_batch_size": ${BATCH},
+    "gradient_accumulation_steps": 1,
+    "logging_steps": 1,
+    "save_steps": 9999,
+    "bf16": $( [ "${DTYPE}" = "bf16" ] && echo "true" || echo "false" ),
+    "fp16": $( [ "${DTYPE}" = "fp16" ] && echo "true" || echo "false" ),
+    "gradient_checkpointing": true,
+    "num_generations": 2,
+    "learning_rate": 5e-7,
+    "beta": 0.04,
+    "reward_weight_accuracy": 0.5,
+    "reward_weight_length": 0.3,
+    "reward_weight_sentence": 0.2
+}
+EOF
+
+echo ""
+echo ">>> Running GRPO (10 steps, K=2)..."
+python src/SFT_GRPO/train_grpo.py \
+    --model_name "${LOCAL_MODEL}" \
+    --output_dir "${OUTPUT_DIR}" \
+    --train_data "data/grpo_train.jsonl" \
+    --val_data "data/grpo_val.jsonl" \
+    --total_steps 10 \
+    --num_generations 2 \
+    --config "${LOGS_DIR}/debug_grpo_cfg.json"
+
+echo ""
+echo "=============================================================="
+echo "DEBUG GRPO complete."
+echo "Output: ${OUTPUT_DIR}/"
+echo "End:    $(date)"
+echo "=============================================================="
