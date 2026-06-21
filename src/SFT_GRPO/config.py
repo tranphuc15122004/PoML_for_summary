@@ -195,6 +195,10 @@ class SFTConfig:
     sft_val_wl_size: int = 500
     """First N WikiLingua val samples used for SFT val."""
 
+    disable_thinking: bool = False
+    """Set True for Qwen3/Qwen3.5 models to suppress <think> blocks during SFT.
+    Passed as enable_thinking=False to the tokenizer's apply_chat_template."""
+
     def __post_init__(self):
         self.model = ModelConfig(**self.model) if isinstance(self.model, dict) else self.model
 
@@ -220,8 +224,10 @@ class GRPOConfig:
     temperature: float = 0.7
     """Temperature for rollout generation."""
 
-    max_new_tokens: int = 256
-    """Max tokens per generated completion."""
+    max_new_tokens: int = 80
+    """Max tokens per generated completion.
+    References are median 17 words (~25 tokens). 80 tokens covers p99 (~47 words)
+    with buffer and avoids ROUGE-L precision dilution from overly long generations."""
 
     max_seq_length: int = 3072
     """Total context length. H200: 3072. A100-40G: 2048. max_new_tokens must be < max_seq_length."""
@@ -236,13 +242,16 @@ class GRPOConfig:
     epsilon: float = 0.2
     """PPO-style clipping parameter."""
 
-    beta: float = 0.04
-    """KL penalty coefficient."""
+    beta: float = 0.15
+    """KL penalty coefficient. Higher value keeps policy closer to SFT reference.
+    0.04 was too low — KL exploded to 4.6+ causing policy collapse within 200 steps.
+    0.15 provides strong enough anchor while still allowing meaningful updates."""
 
     # Training
-    per_device_train_batch_size: int = 12
+    per_device_train_batch_size: int = 4
     """Number of prompts per device. Each generates K completions.
-    H200 141GB + flash_attn → 12; A100 80GB → 4; A100 40GB → 2."""
+    Calibration will probe and adjust automatically. With gradient_checkpointing,
+    H200 can fit batch=4–8; defaults start conservatively and calibration scales up."""
 
     gradient_accumulation_steps: int = 1
     """Effective prompts per update = batch_size * grad_accum.
@@ -256,9 +265,9 @@ class GRPOConfig:
 
     bf16: bool = True
     fp16: bool = False
-    gradient_checkpointing: bool = False
-    # H200: policy (3B) + ref (3B) + rollouts fit in 141GB without checkpointing.
-    # Set True for A100 40GB.
+    gradient_checkpointing: bool = True
+    # H200: policy (4B) + ref (4B) + rollouts + vocab 152K needs ~80 GB with
+    # gradient checkpointing vs ~140 GB without. Always enable for GRPO.
     gradient_checkpointing_kwargs: dict = field(
         default_factory=lambda: {"use_reentrant": False}
     )
@@ -280,11 +289,11 @@ class GRPOConfig:
     reward_weight_sentence: float = 0.2
 
     # Length-scaled advantage
-    length_advantage_alpha: float = 0.5
+    length_advantage_alpha: float = 0.0
     """Amplification factor for length-correct completions.
-    Advantage is scaled by (1 + alpha * R_len), so sequences that hit the
-    target length get a stronger gradient signal than those that miss it.
-    Set 0.0 to disable. Typical range: 0.3–1.0."""
+    Disabled (0.0): when R_acc≈0 for all completions, this amplified length-only
+    reward hacking — model learned to produce right-length garbage instead of
+    content. Re-enable only after R_acc is reliably non-zero."""
 
     # Logging & saving
     logging_steps: int = 5
@@ -295,6 +304,23 @@ class GRPOConfig:
     report_to: str = "none"
 
     total_steps: int = 800
+
+    repetition_penalty: float = 1.0
+    """Rollout repetition penalty. MUST stay 1.0 (off). HF applies it over the FULL
+    input_ids — i.e. the ~2000-token source article in the prompt — so >1 penalises
+    the model for reusing the article's own vocabulary, which is exactly what a faithful
+    summary must do. A value of 1.3 collapsed R_acc to ≈0 by pushing the decoder to
+    out-of-distribution tokens (foreign scripts, symbols). Matches TRL's GRPO default
+    (1.0). Degenerate outputs are handled reward-side by rewards._is_degenerate()."""
+
+    no_repeat_ngram_size: int = 0
+    """Block exact n-gram repetition during generation. 0 = disabled. A value of 3
+    forbade reusing ANY trigram from the source article and corrupted short Vietnamese
+    summaries; TRL's GRPO trainer does not use it."""
+
+    disable_thinking: bool = False
+    """Set True for Qwen3/Qwen3.5 models to suppress <think> blocks in rollouts.
+    Passed as enable_thinking=False to all apply_chat_template calls in GRPO."""
 
     def __post_init__(self):
         self.model = ModelConfig(**self.model) if isinstance(self.model, dict) else self.model

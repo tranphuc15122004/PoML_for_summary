@@ -11,10 +11,23 @@ Usage:
 
 from __future__ import annotations
 
+import sys
+import types
+
+# bitsandbytes 0.44.x references triton.ops which was removed in triton 3.x.
+# PEFT imports bitsandbytes unconditionally during get_peft_model(); stub the
+# missing submodule so the import succeeds without GPU-quantization support.
+if "triton.ops" not in sys.modules:
+    _triton_ops = types.ModuleType("triton.ops")
+    _triton_perf = types.ModuleType("triton.ops.matmul_perf_model")
+    _triton_perf.early_config_prune = lambda *a, **kw: None
+    _triton_perf.estimate_matmul_time = lambda *a, **kw: 0.0
+    sys.modules["triton.ops"] = _triton_ops
+    sys.modules["triton.ops.matmul_perf_model"] = _triton_perf
+
 import json
 import logging
 import os
-import sys
 from typing import Optional
 
 # ---------------------------------------------------------------------------
@@ -72,7 +85,7 @@ def load_jsonl(path: str) -> HFDataset:
 # Model loading
 # ==============================================================================
 
-def load_tokenizer(model_cfg: ModelConfig):
+def load_tokenizer(model_cfg: ModelConfig, disable_thinking: bool = False):
     """Load and configure tokenizer."""
     tokenizer = AutoTokenizer.from_pretrained(
         model_cfg.model_name_or_path,
@@ -84,6 +97,16 @@ def load_tokenizer(model_cfg: ModelConfig):
         tokenizer.pad_token = tokenizer.eos_token
     if tokenizer.chat_template is None:
         logger.warning("No chat template found — using default Qwen2 format.")
+    # Qwen3/Qwen3.5 thinking mode: patch apply_chat_template to always disable
+    # <think> blocks. TRL's SFTTrainer calls this internally, so patching the
+    # tokenizer is the only way to control it without forking TRL.
+    if disable_thinking:
+        _orig_tpl = tokenizer.apply_chat_template
+        def _no_thinking(*args, **kwargs):
+            kwargs.setdefault("enable_thinking", False)
+            return _orig_tpl(*args, **kwargs)
+        tokenizer.apply_chat_template = _no_thinking
+        logger.info("Thinking mode disabled for Qwen3-family model.")
     return tokenizer
 
 
@@ -285,7 +308,7 @@ def train(cfg: SFTConfig, resume_from: Optional[str] = None):
         logger.info(f"Val samples:   {len(val_dataset):,}")
 
     # 2. Load tokenizer & model
-    tokenizer = load_tokenizer(cfg.model)
+    tokenizer = load_tokenizer(cfg.model, disable_thinking=cfg.disable_thinking)
     model = load_model(cfg.model)
     lora_config = get_lora_config(cfg.model)
 

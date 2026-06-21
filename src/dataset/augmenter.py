@@ -570,11 +570,13 @@ def build_all_splits(
         test_wikilingua.append(s)
         count += 1
 
-    # VLSP test + abmusu
-    for split_name in ["test", "abmusu"]:
+    # VLSP — only use abmusu split (test.label.jsonl has placeholder [0] labels → empty targets)
+    for split_name in ["abmusu"]:
         try:
             vlsp_test = VLSPDataset(raw_cfg, split=split_name)
             for sample in vlsp_test:
+                if not sample.get("target"):
+                    continue
                 s = augmenter.make_test_prompt(sample["source"], sample["target"])
                 s["meta"]["dataset"] = "vlsp"
                 test_vlsp.append(s)

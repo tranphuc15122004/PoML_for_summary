@@ -71,37 +71,61 @@ MODELS_DIR = "models"
 
 MODEL_FAMILIES = {
     "qwen2.5": {
-        "base": os.path.join(BASE_DIR, "Qwen2.5-3B-Instruct"),
-        "sft_aug": os.path.join(MODELS_DIR, "sft_aug_Qwen25_3B_2e", "final"),
+        "base":       os.path.join(BASE_DIR, "Qwen2.5-3B-Instruct"),
+        "sft_aug":    os.path.join(MODELS_DIR, "sft_aug_Qwen25_3B_2e", "final"),
         "sft_no_aug": os.path.join(MODELS_DIR, "sft_no_aug_Qwen25_3B_2e", "final"),
     },
     "qwen3.5": {
-        "base": os.path.join(BASE_DIR, "Qwen3.5-4B"),
-        "sft_aug": os.path.join(MODELS_DIR, "sft_aug_Qwen3.5-4B", "final"),
+        "base":       os.path.join(BASE_DIR, "Qwen3.5-4B"),
+        "sft_aug":    os.path.join(MODELS_DIR, "sft_aug_Qwen3.5-4B", "final"),
         "sft_no_aug": os.path.join(MODELS_DIR, "sft_no_aug_Qwen3.5-4B", "final"),
+    },
+    "qwen3_base": {
+        "base":  os.path.join(BASE_DIR, "Qwen3-4B-Base"),
+        "sft":   os.path.join(MODELS_DIR, "sft_qwen3_4b_base", "final"),
+        # GRPO from base (fresh) — v4 and v5 only (v3 incomplete)
+        "grpo_fresh_v4": os.path.join(MODELS_DIR, "grpo_qwen3_4b_base_fresh_v4", "final"),
+        "grpo_fresh_v5": os.path.join(MODELS_DIR, "grpo_qwen3_4b_base_fresh_v5", "final"),
+        # GRPO from SFT checkpoint
+        "grpo_sft_v4":   os.path.join(MODELS_DIR, "grpo_qwen3_4b_base_sft_v4", "final"),
+        "grpo_sft_v5":   os.path.join(MODELS_DIR, "grpo_qwen3_4b_base_sft_v5", "final"),
+    },
+    "qwen3_instruct": {
+        "base":  os.path.join(BASE_DIR, "Qwen3-4B"),
+        "sft":   os.path.join(MODELS_DIR, "sft_qwen3_4b_instruct", "final"),
+        # GRPO from base (fresh) — v4 and v5 only (v3 incomplete)
+        "grpo_fresh_v4": os.path.join(MODELS_DIR, "grpo_qwen3_4b_instruct_fresh_v4", "final"),
+        "grpo_fresh_v5": os.path.join(MODELS_DIR, "grpo_qwen3_4b_instruct_fresh_v5", "final"),
+        # GRPO from SFT checkpoint
+        "grpo_sft_v4":   os.path.join(MODELS_DIR, "grpo_qwen3_4b_instruct_sft_v4", "final"),
+        "grpo_sft_v5":   os.path.join(MODELS_DIR, "grpo_qwen3_4b_instruct_sft_v5", "final"),
     },
 }
 
 
 def discover_models(families: Optional[str] = None) -> Dict[str, str]:
-    """Discover available model checkpoints."""
-    models = {}
-    family_keys = ["qwen2.5", "qwen3.5"]
+    """Discover available model checkpoints.
+
+    families: comma-separated family names or 'all'.
+      Prefix match: 'qwen3' matches 'qwen3_base' and 'qwen3_instruct'.
+      Exact match:  'qwen3.5' matches only 'qwen3.5'.
+    """
+    all_keys = list(MODEL_FAMILIES.keys())
     if families and families != "all":
-        family_keys = [f for f in family_keys if families.lower() in f]
+        requested = {f.strip().lower() for f in families.split(",")}
+        all_keys = [
+            k for k in all_keys
+            if any(k == r or k.startswith(r + "_") for r in requested)
+        ]
 
-    for fkey in family_keys:
+    models = {}
+    for fkey in all_keys:
         family = MODEL_FAMILIES[fkey]
+        # Label: qwen3_base → QWEN3_BASE, qwen2.5 → QWEN25
         label = fkey.replace(".", "").upper()
-
-        if os.path.isdir(family["base"]):
-            models[f"{label}_base"] = family["base"]
-
-        for variant in ["sft_aug", "sft_no_aug"]:
-            p = family[variant]
-            if os.path.isdir(p):
-                vlabel = variant.replace("sft_", "")
-                models[f"{label}_{vlabel}"] = p
+        for variant, path in family.items():
+            if os.path.isdir(path):
+                models[f"{label}_{variant}"] = path
 
     return models
 
@@ -121,7 +145,11 @@ def main():
     )
     parser.add_argument(
         "--families", type=str, default=None,
-        help="Model families: 'qwen2.5', 'qwen3.5', or 'all' (default)"
+        help=(
+            "Comma-separated family names or 'all'. "
+            "Options: qwen2.5, qwen3.5, qwen3_base, qwen3_instruct, qwen3 (matches both qwen3_* families). "
+            "Default: all discovered families."
+        )
     )
     parser.add_argument(
         "--quick", action="store_true",

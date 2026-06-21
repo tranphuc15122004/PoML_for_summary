@@ -3,7 +3,23 @@
     "allow": [
       "Bash(python *)",
       "Read(//scratch/jp09/dd9648/PoML_for_summary/logs/**)",
-      "Bash(pip show *)"
+      "Bash(pip show *)",
+      "Bash(qstat -f 171398265.gadi-pbs)",
+      "Bash(qstat -f 171398266.gadi-pbs)",
+      "Bash(sort -t. -k1 -n)",
+      "Bash(qstat -x -f)",
+      "Bash(qstat)",
+      "Bash(qsub *)",
+      "Bash(qstat *)",
+      "Bash(qdel 171570911.gadi-pbs 171570915.gadi-pbs 171570919.gadi-pbs 171570924.gadi-pbs)",
+      "Bash(qdel 171574700.gadi-pbs 171574701.gadi-pbs 171574702.gadi-pbs 171574703.gadi-pbs)",
+      "Bash(sort -t. -k2 -rn)",
+      "Bash(grep -E '\\\\.\\(out|err\\)$')",
+      "Bash(awk 'NR>=1 && NR<=10' /scratch/jp09/dd9648/PoML_for_summary/models/grpo_qwen3_4b_base_sft/train.log)",
+      "Bash(awk -F'| ' '{print NR\": \"$0}')",
+      "Bash(awk 'NR==39,NR==45')",
+      "Bash(xargs -I{} cat {})",
+      "Bash(python3 *)"
     ]
   }
 }

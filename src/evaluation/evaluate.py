@@ -409,9 +409,10 @@ def evaluate_model_on_dataset(
         bart_batch_size=cfg.bart_batch_size,
     )
 
-    for s in per_sample:
+    for s, meta in zip(per_sample, meta_list):
         s["model"] = model_name
         s["dataset"] = dataset_name
+        s["meta_dataset"] = meta.get("dataset", "")
 
     return per_sample
 
@@ -474,8 +475,19 @@ def save_results(
         agg = aggregate(samples)
         rows.append({"model": model_name, "dataset": dataset_name, **agg})
 
+        # Per-meta_dataset sub-rows when a single file contains multiple source datasets
+        sub_groups: Dict[str, List[Dict]] = {}
+        for s in samples:
+            md = s.get("meta_dataset", "")
+            if md:
+                sub_groups.setdefault(md, []).append(s)
+        if len(sub_groups) > 1:
+            for md in sorted(sub_groups):
+                sub_agg = aggregate(sub_groups[md])
+                rows.append({"model": model_name, "dataset": f"  {md}", **sub_agg})
+
     # Per-model overall average (across all datasets)
-    models_seen = sorted({r["model"] for r in rows})
+    models_seen = sorted({r["model"] for r in rows if not r["dataset"].startswith("  ")})
     for model_name in models_seen:
         model_samples = [s for s in all_per_sample if s["model"] == model_name]
         agg = aggregate(model_samples)
@@ -530,11 +542,14 @@ def _format_table(rows: List[Dict], show_bart: bool) -> str:
     lines = [sep, "EVALUATION SUMMARY", sep, header, "-" * len(sep)]
     prev_model = None
     for row in rows:
-        if row["model"] != prev_model and prev_model is not None:
+        is_sub = row["dataset"].startswith("  ")
+        if not is_sub and row["model"] != prev_model and prev_model is not None:
             lines.append("")
-        prev_model = row["model"]
+        if not is_sub:
+            prev_model = row["model"]
+        model_col = row["model"] if not is_sub else ""
         line = (
-            f"{row['model']:<22} {row['dataset']:<14} {row['n']:>6}  "
+            f"{model_col:<22} {row['dataset']:<14} {row['n']:>6}  "
             f"{_fmt(row['rouge2']):>8}  {_fmt(row['length_error_pct'], 2):>9}  "
             f"{_fmt(row['length_distance'], 1):>8}"
         )

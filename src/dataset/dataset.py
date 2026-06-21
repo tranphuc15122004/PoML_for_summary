@@ -193,7 +193,7 @@ class VietNewsDataset(BaseSummarizationDataset):
     """Single-document abstractive summarization from Vietnamese news.
 
     Data layout:
-        vietnews-master/vietnews-master/data/
+        vietnews-master/data/
         ├── train_tokenized/   (*.txt.seg)
         ├── val_tokenized/
         └── test_tokenized/
@@ -227,7 +227,7 @@ class VietNewsDataset(BaseSummarizationDataset):
     def data_dir(self) -> str:
         return self._resolve_path(
             self.config.data_root,
-            "vietnews-master/vietnews-master/data",
+            "vietnews-master/data",
             self.SPLIT_MAP[self.split],
         )
 
@@ -283,7 +283,7 @@ class WikiLinguaDataset(BaseSummarizationDataset):
     """Single-document abstractive summarization from WikiLingua (Vietnamese).
 
     Data layout:
-        wikilingua/wikilingua/
+        wikilingua/
         ├── train.json
         ├── val.json
         └── test.json
@@ -311,7 +311,7 @@ class WikiLinguaDataset(BaseSummarizationDataset):
     def file_path(self) -> str:
         return self._resolve_path(
             self.config.data_root,
-            "wikilingua/wikilingua",
+            "wikilingua",
             self.SPLIT_MAP[self.split],
         )
 
@@ -348,7 +348,7 @@ class ViMsDataset(BaseSummarizationDataset):
     """Multi-document abstractive summarization (Vietnamese).
 
     Data layout:
-        ViMs-Dataset-master/ViMs-Dataset-master/ViMs/ViMs/
+        ViMs-Dataset-master/ViMs/
         ├── original/     (300 clusters, each: Cluster_XXX/original/*.txt)
         ├── summary/      (gold summaries: 0.gold.txt, 1.gold.txt per cluster)
 
@@ -371,7 +371,7 @@ class ViMsDataset(BaseSummarizationDataset):
     def _base_dir(self) -> str:
         return self._resolve_path(
             self.config.data_root,
-            "ViMs-Dataset-master/ViMs-Dataset-master/ViMs/ViMs",
+            "ViMs-Dataset-master/ViMs",
         )
 
     def _raw_samples(self) -> Iterator[Dict[str, str]]:
@@ -510,7 +510,7 @@ class VLSPDataset(BaseSummarizationDataset):
     @property
     def file_path(self) -> str:
         return self._resolve_path(
-            self.config.data_root, "vlsp/vlsp", self.SPLIT_MAP[self.split]
+            self.config.data_root, "vlsp", self.SPLIT_MAP[self.split]
         )
 
     def _raw_samples(self) -> Iterator[Dict[str, str]]:

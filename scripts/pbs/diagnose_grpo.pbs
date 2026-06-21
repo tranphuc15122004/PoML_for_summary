@@ -1,0 +1,35 @@
+#!/bin/bash
+#PBS -N poml_diag_grpo
+#PBS -q gpuhopper
+#PBS -l ncpus=12,ngpus=1,mem=120gb
+#PBS -l walltime=01:00:00
+#PBS -P hn98
+#PBS -l storage=scratch/jp09+scratch/li96+gdata/hn98
+#PBS -o /scratch/jp09/dd9648/PoML_for_summary/logs/diagnose_grpo.out
+#PBS -j oe
+
+set -euo pipefail
+
+PROJECT_ROOT="/scratch/jp09/dd9648/PoML_for_summary"
+VENV_PATH="${PROJECT_ROOT}/.venv"
+
+cd "${PROJECT_ROOT}"
+source "${VENV_PATH}/bin/activate"
+export PYTHONPATH="${PROJECT_ROOT}/src:${PYTHONPATH:-}"
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+export TOKENIZERS_PARALLELISM=false
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+
+echo "=============================================================="
+echo "GRPO rollout diagnostic"
+echo "Node: $(hostname)"
+echo "GPU:  $(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)"
+echo "Start: $(date)"
+echo "=============================================================="
+
+python scripts/tools/diagnose_grpo_rollout.py
+
+echo "=============================================================="
+echo "End: $(date)"
+echo "=============================================================="

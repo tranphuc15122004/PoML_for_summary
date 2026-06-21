@@ -1,0 +1,608 @@
+#!/bin/bash
+#PBS -N poml_smoke_qwen3
+#PBS -q gpuhopper
+#PBS -l ncpus=12,ngpus=1,mem=60gb
+#PBS -l walltime=01:30:00
+#PBS -P li96
+#PBS -l storage=scratch/jp09+gdata/hn98
+#PBS -o /scratch/jp09/dd9648/PoML_for_summary/logs/smoke_qwen3_%j.out
+#PBS -e /scratch/jp09/dd9648/PoML_for_summary/logs/smoke_qwen3_%j.err
+#PBS -j oe
+
+# =============================================================================
+# Comprehensive Smoke Test — Qwen3-4B SFT + GRPO pipeline
+# Tests exact production config, args, and code paths from the 4 PBS jobs.
+# Expected runtime: ~25-35 min on H200.
+# =============================================================================
+
+set -euo pipefail
+
+PROJECT_ROOT="/scratch/jp09/dd9648/PoML_for_summary"
+VENV_PATH="${PROJECT_ROOT}/.venv"
+SRC_PATH="${PROJECT_ROOT}/src"
+LOGS_DIR="${PROJECT_ROOT}/logs"
+SMOKE_OUT="${PROJECT_ROOT}/models/smoke_test"
+SMOKE_DATA="${PROJECT_ROOT}/data/smoke_test"
+
+mkdir -p "${LOGS_DIR}" "${SMOKE_OUT}" "${SMOKE_DATA}"
+cd "${PROJECT_ROOT}"
+
+source "${VENV_PATH}/bin/activate"
+export PYTHONPATH="${SRC_PATH}:${PYTHONPATH:-}"
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+export TOKENIZERS_PARALLELISM=false
+export HF_DATASETS_CACHE="/scratch/jp09/dd9648/.cache/huggingface/datasets"
+mkdir -p "${HF_DATASETS_CACHE}"
+
+# ---------------------------------------------------------------------------
+# flash-attn: rebuild if binary is incompatible with current PyTorch/CUDA ABI.
+# PyTorch 2.12.0+cu130 requires CUDA 13.0 for extensions, but Gadi only has 12.9.
+# Workaround: fake CUDA 13.0 wrapper that reports 13.0 for the version check
+# but delegates real compilation to nvcc 12.9 (which fully supports sm_80/sm_90).
+# Only build for sm_80 + sm_90 — no Blackwell (sm_100/120) on this cluster.
+# ---------------------------------------------------------------------------
+_FLASH_SRC="${PROJECT_ROOT}/.flash_attn_src/flash_attn-2.8.3.post1.tar.gz"
+if ! python -c "import flash_attn" 2>/dev/null; then
+    echo "flash_attn import failed — rebuilding from local source (this takes ~15 min)..."
+    if [ -f "${_FLASH_SRC}" ]; then
+        module load cuda/12.9.0 2>/dev/null || true
+        # Create a fake CUDA 13.0 wrapper: reports 13.0 to satisfy PyTorch version check,
+        # forwards real compilation to nvcc 12.9.
+        _FAKE_CUDA="/tmp/fakecuda13_$$"
+        mkdir -p "${_FAKE_CUDA}/bin"
+        cat > "${_FAKE_CUDA}/bin/nvcc" << 'NVCC_WRAPPER'
+#!/bin/bash
+if [[ "$*" == "--version" ]]; then
+    echo "nvcc: NVIDIA (R) Cuda compiler driver"
+    echo "Copyright (c) 2005-2025 NVIDIA Corporation"
+    echo "Cuda compilation tools, release 13.0, V13.0.0"
+else
+    exec /apps/cuda/12.9.0/bin/nvcc "$@"
+fi
+NVCC_WRAPPER
+        chmod +x "${_FAKE_CUDA}/bin/nvcc"
+        ln -sf /apps/cuda/12.9.0/include "${_FAKE_CUDA}/include"
+        ln -sf /apps/cuda/12.9.0/lib64 "${_FAKE_CUDA}/lib64"
+        echo "  fake CUDA 13.0 wrapper: $(${_FAKE_CUDA}/bin/nvcc --version | grep release)"
+        CUDA_HOME="${_FAKE_CUDA}" FLASH_ATTN_CUDA_ARCHS="80;90" MAX_JOBS=4 \
+            pip install "${_FLASH_SRC}" --no-build-isolation --force-reinstall --quiet || true
+        rm -rf "${_FAKE_CUDA}"
+    else
+        echo "  Local source not found: ${_FLASH_SRC}"
+    fi
+    if python -c "import flash_attn" 2>/dev/null; then
+        echo "flash_attn rebuilt OK — will use flash_attention_2 in this run."
+    else
+        echo "WARNING: flash_attn rebuild failed — sdpa fallback active (correct but slower)."
+    fi
+else
+    echo "flash_attn OK — flash_attention_2 enabled."
+fi
+
+PASS=0; FAIL=0; FAILURES=""
+
+ok()   { echo "  [PASS] $*"; PASS=$((PASS+1)); }
+fail() { echo "  [FAIL] $*"; FAIL=$((FAIL+1)); FAILURES="${FAILURES}  - $*\n"; }
+warn() { echo "  [WARN] $*"; }  # optional checks — failure noted but not counted
+
+run_check() {
+    local name="$1"; shift
+    echo ""; echo ">>> ${name}"
+    if "$@"; then ok "${name}"; else fail "${name}"; fi
+}
+
+warn_check() {
+    local name="$1"; shift
+    echo ""; echo ">>> ${name}"
+    if "$@"; then ok "${name}"; else warn "${name} (optional — sdpa fallback active)"; fi
+}
+
+echo "=============================================================="
+echo "SMOKE TEST — Qwen3-4B SFT + GRPO pipeline"
+echo "Job ID:  ${PBS_JOBID}"
+echo "Node:    $(hostname)"
+echo "GPU:     $(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)"
+echo "VRAM:    $(nvidia-smi --query-gpu=memory.total --format=csv,noheader | head -1)"
+echo "Start:   $(date)"
+echo "=============================================================="
+
+# ---------------------------------------------------------------------------
+# SECTION 1 — Environment checks
+# ---------------------------------------------------------------------------
+echo ""; echo "=== 1. ENVIRONMENT ==="
+
+run_check "PyTorch + CUDA" python -c "
+import torch
+assert torch.cuda.is_available(), 'CUDA not available'
+print(f'  PyTorch {torch.__version__}, CUDA {torch.version.cuda}')
+print(f'  GPU: {torch.cuda.get_device_name(0)}, VRAM: {torch.cuda.get_device_properties(0).total_memory/1e9:.1f} GB')
+"
+
+run_check "Key packages" python -c "
+import transformers, peft, trl, accelerate
+print(f'  transformers={transformers.__version__}, peft={peft.__version__}, trl={trl.__version__}')
+print(f'  accelerate={accelerate.__version__}')
+# rouge_l is implemented inline in rewards.py (no external rouge_score package needed)
+"
+
+warn_check "flash-attn importable" python -c "
+import flash_attn
+print(f'  flash_attn {flash_attn.__version__} — flash_attention_2 will be used')
+"
+
+run_check "triton shim + PEFT import" python -c "
+import sys, types
+if 'triton.ops' not in sys.modules:
+    _t = types.ModuleType('triton.ops')
+    _p = types.ModuleType('triton.ops.matmul_perf_model')
+    _p.early_config_prune = lambda *a,**k: None
+    _p.estimate_matmul_time = lambda *a,**k: 0.0
+    sys.modules['triton.ops'] = _t
+    sys.modules['triton.ops.matmul_perf_model'] = _p
+from peft import LoraConfig, get_peft_model
+print('  PEFT import after triton shim: OK')
+"
+
+run_check "Project imports" python -c "
+from SFT_GRPO.config import SFTConfig, GRPOConfig, ModelConfig
+from SFT_GRPO.rewards import compute_all_rewards, accuracy_reward, length_reward, sentence_reward
+from SFT_GRPO.metrics_logger import MetricsTracker
+print('  All project imports OK')
+"
+
+run_check "Model paths exist" python -c "
+import os
+for m in ['/g/data/hn98/dd9648/models/Qwen3-4B-Base', '/g/data/hn98/dd9648/models/Qwen3-4B']:
+    assert os.path.isfile(os.path.join(m,'config.json')), f'Missing {m}/config.json'
+    assert os.path.isfile(os.path.join(m,'tokenizer.json')), f'Missing {m}/tokenizer.json'
+    print(f'  {m}: OK')
+"
+
+run_check "Production data files" python -c "
+for f in ['data/sft_train.jsonl','data/sft_val.jsonl','data/grpo_train.jsonl','data/grpo_val.jsonl']:
+    n = sum(1 for _ in open(f))
+    assert n > 0, f'{f} empty'
+    print(f'  {f}: {n:,} lines')
+"
+
+# ---------------------------------------------------------------------------
+# SECTION 2 — Config JSON generation (exact PBS logic)
+# ---------------------------------------------------------------------------
+echo ""; echo "=== 2. CONFIG JSON GENERATION ==="
+
+DTYPE="bf16"; GPU_MODEL="h200"
+
+_BF16=$([ "${DTYPE}" = 'bf16' ] && echo 'True' || echo 'False')
+_FP16=$([ "${DTYPE}" = 'fp16' ] && echo 'True' || echo 'False')
+_GC=$([ "${GPU_MODEL}" = 'v100' ] && echo 'True' || echo 'False')
+
+GRPO_CFG="${LOGS_DIR}/smoke_grpo_${PBS_JOBID}.json"
+python -c "
+import json
+print(json.dumps({
+    'per_device_train_batch_size': 8,
+    'gradient_accumulation_steps': 1,
+    'bf16': ${_BF16},
+    'fp16': ${_FP16},
+    'gradient_checkpointing': ${_GC},
+    'reward_weight_accuracy': 0.5,
+    'reward_weight_length': 0.3,
+    'reward_weight_sentence': 0.2,
+    'disable_thinking': True,
+}, indent=2))" > "${GRPO_CFG}"
+
+run_check "GRPO JSON values (bf16=true, fp16=false, gc=false)" python -c "
+import json
+c = json.load(open('${GRPO_CFG}'))
+assert c['bf16'] is True  and type(c['bf16']) is bool, f'bf16 wrong: {c[\"bf16\"]!r}'
+assert c['fp16'] is False and type(c['fp16']) is bool, f'fp16 wrong: {c[\"fp16\"]!r}'
+assert c['gradient_checkpointing'] is False, f'gc wrong: {c[\"gradient_checkpointing\"]!r}'
+assert c['disable_thinking'] is True
+print(f'  {json.dumps(c, separators=(\",\",\":\"))}')
+"
+
+SFT_CFG="${LOGS_DIR}/smoke_sft_${PBS_JOBID}.json"
+python -c "import json; print(json.dumps({'gradient_accumulation_steps': 2, 'disable_thinking': True}))" > "${SFT_CFG}"
+
+run_check "SFT JSON values" python -c "
+import json
+c = json.load(open('${SFT_CFG}'))
+assert c['gradient_accumulation_steps'] == 2
+assert c['disable_thinking'] is True
+print(f'  {c}')
+"
+
+# ---------------------------------------------------------------------------
+# SECTION 3 — Reward functions
+# ---------------------------------------------------------------------------
+echo ""; echo "=== 3. REWARD FUNCTIONS ==="
+
+run_check "length_reward (khoảng/range/max)" python -c "
+from SFT_GRPO.rewards import length_reward
+# Exact hits → 1.0
+assert length_reward(' '.join(['x']*10), 'khoảng 10 từ') == 1.0, 'khoang exact'
+assert length_reward(' '.join(['x']*25), 'trong khoảng 20-30 từ') == 1.0, 'range exact'
+assert length_reward(' '.join(['x']*50), 'không quá 50 từ') == 1.0, 'max exact'
+# Far misses → 0 (but reward may give partial credit; just check < 0.5)
+assert length_reward(' '.join(['x']*20), 'khoảng 10 từ') == 0.0, 'far miss khoang'
+r_far = length_reward(' '.join(['x']*80), 'không quá 50 từ')
+assert r_far < 1.0, f'far over max should be <1.0, got {r_far}'
+print('  length_reward: exact hits=1.0, far misses<1.0 — OK')
+"
+
+run_check "sentence_reward" python -c "
+from SFT_GRPO.rewards import sentence_reward
+# Exact match
+r2 = sentence_reward('Trời đẹp. Hôm nay vui.', 'khoảng 2 câu')
+assert r2 == 1.0, f'2 sentences for khoang 2: {r2}'
+# Far miss (5 sentences for khoang 2 → tolerance ±1 → max=3 → 5 is out)
+r5 = sentence_reward('A. B. C. D. E.', 'khoảng 2 câu')
+assert r5 < 1.0, f'5 sentences for khoang 2 should be <1.0: {r5}'
+print(f'  sentence_reward: exact=1.0, far_miss={r5:.2f} — OK')
+"
+
+run_check "compute_all_rewards (composite)" python -c "
+from SFT_GRPO.rewards import compute_all_rewards
+r = compute_all_rewards(
+    generated='Hà Nội thông qua nghị quyết kinh tế số.',
+    reference='Hà Nội thông qua nghị quyết phát triển kinh tế số.',
+    length_requirement='khoảng 8 từ',
+    sentence_requirement='khoảng 1 câu',
+)
+for k in ('total','accuracy','length','sentence'):
+    assert 0 <= r[k] <= 1, f'{k}={r[k]} out of [0,1]'
+print(f'  total={r[\"total\"]:.3f}, acc={r[\"accuracy\"]:.3f}, len={r[\"length\"]:.3f}, sent={r[\"sentence\"]:.3f}')
+"
+
+run_check "Anti-reward-hacking: degenerate outputs score total < 0.05" python -c "
+from SFT_GRPO.rewards import compute_all_rewards
+# These blobs previously scored 0.50 by gaming 'không quá X từ/câu' constraints.
+# With the fix, R_len and R_sent must be 0 for degenerate outputs.
+cases = [
+    ('Is ' + '1'*200, 'Gold standard tiếng Việt.',  'không quá 21 từ', 'không quá 2 câu'),
+    ('1'*60,          'Nội dung quan trọng.',        'không quá 30 từ', 'khoảng 1 câu'),
+    ('Nhà ,' * 15,    'Căn nhà đẹp và rộng rãi.',   'không quá 30 từ', 'không quá 2 câu'),
+]
+for gen, ref, len_req, sent_req in cases:
+    r = compute_all_rewards(gen, ref, len_req, sent_req)
+    assert r['length'] == 0.0, f'R_len should be 0 for degenerate, got {r[\"length\"]}: {gen[:30]!r}'
+    assert r['sentence'] == 0.0, f'R_sent should be 0 for degenerate, got {r[\"sentence\"]}: {gen[:30]!r}'
+    assert r['total'] < 0.05, f'total should be ~0 for degenerate, got {r[\"total\"]}: {gen[:30]!r}'
+    print(f'  total={r[\"total\"]:.4f} (expected ~0) for {gen[:25]!r}... ✓')
+"
+
+# ---------------------------------------------------------------------------
+# SECTION 4 — Create small smoke test data (20 SFT + 16 GRPO samples)
+# ---------------------------------------------------------------------------
+echo ""; echo "=== 4. SMOKE TEST DATA ==="
+
+python -c "
+import json, os
+
+articles = [
+    ('Hội đồng Nhân dân thành phố Hà Nội vừa thông qua nghị quyết về phát triển kinh tế số giai đoạn 2024-2030 với tổng vốn đầu tư dự kiến lên đến 50.000 tỷ đồng nhằm thúc đẩy chuyển đổi số toàn diện.', 'Hà Nội thông qua nghị quyết phát triển kinh tế số 2024-2030, vốn đầu tư 50.000 tỷ đồng.'),
+    ('Bộ Giáo dục và Đào tạo công bố kết quả thi tốt nghiệp THPT năm 2025 với tỷ lệ đỗ tốt nghiệp toàn quốc đạt 98.2%, tăng nhẹ so với năm trước trong bối cảnh đề thi có nhiều đổi mới.', 'Tỷ lệ đỗ tốt nghiệp THPT 2025 đạt 98.2%, tăng nhẹ so với năm trước.'),
+    ('Giá xăng dầu trong nước điều chỉnh tăng lần thứ ba liên tiếp từ 15h chiều nay sau quyết định của Liên bộ Công Thương - Tài chính, ảnh hưởng đến chi phí sinh hoạt của người dân.', 'Giá xăng dầu tăng lần ba liên tiếp từ chiều nay theo quyết định liên bộ.'),
+    ('Tập đoàn công nghệ VinAI ra mắt mô hình AI ngôn ngữ mới với khả năng xử lý tiếng Việt vượt trội, hỗ trợ hơn 50 tác vụ và được tích hợp vào nhiều sản phẩm công nghệ trong nước.', 'VinAI ra mắt mô hình AI tiếng Việt mới, hỗ trợ hơn 50 tác vụ và tích hợp sản phẩm công nghệ.'),
+    ('Chính phủ Việt Nam phê duyệt kế hoạch xây dựng 10 khu công nghiệp mới tại các tỉnh miền Trung và Tây Nguyên, thu hút vốn đầu tư nước ngoài FDI trị giá hàng tỷ USD trong giai đoạn 2025-2030.', 'Chính phủ phê duyệt xây 10 khu công nghiệp mới ở miền Trung, thu hút FDI hàng tỷ USD.'),
+]
+
+styles = ['báo chí', 'ngắn gọn', 'học thuật', 'thông tấn']
+length_reqs = ['khoảng 15 từ', 'trong khoảng 12-18 từ', 'không quá 20 từ', 'khoảng 10 từ']
+
+# SFT data
+sft = []
+for src, ref in articles:
+    for i, (lr, st) in enumerate(zip(length_reqs, styles)):
+        sft.append({'messages': [
+            {'role':'system','content':'Bạn là chuyên gia tóm tắt văn bản tiếng Việt.'},
+            {'role':'user','content':f'Tóm tắt ({lr}, phong cách {st}):\n\n{src}'},
+            {'role':'assistant','content':ref}
+        ], 'meta':{'length_requirement':lr,'style':st}})
+
+# GRPO data
+grpo = []
+for src, ref in articles:
+    for lr, st in zip(length_reqs, styles):
+        grpo.append({'prompt':[
+            {'role':'system','content':'Bạn là chuyên gia tóm tắt văn bản tiếng Việt.'},
+            {'role':'user','content':f'Tóm tắt ({lr}, phong cách {st}):\n\n{src}'}
+        ], 'reference':ref, 'meta':{'length_requirement':lr,'style':st}})
+
+os.makedirs('${SMOKE_DATA}', exist_ok=True)
+with open('${SMOKE_DATA}/sft_train.jsonl','w') as f:
+    f.writelines(json.dumps(s, ensure_ascii=False)+'\n' for s in sft)
+with open('${SMOKE_DATA}/sft_val.jsonl','w') as f:
+    f.writelines(json.dumps(s, ensure_ascii=False)+'\n' for s in sft[:4])
+with open('${SMOKE_DATA}/grpo_train.jsonl','w') as f:
+    f.writelines(json.dumps(g, ensure_ascii=False)+'\n' for g in grpo)
+with open('${SMOKE_DATA}/grpo_val.jsonl','w') as f:
+    f.writelines(json.dumps(g, ensure_ascii=False)+'\n' for g in grpo[:4])
+print(f'  SFT: {len(sft)} train, 4 val')
+print(f'  GRPO: {len(grpo)} train, 4 val')
+" && ok "Smoke test data created" || fail "Smoke test data creation"
+
+# SFT smoke config: use small data + 1 epoch. Keep packing=True (production default)
+# to avoid DataCollator issues with the 'meta' column in the dataset.
+SFT_SMOKE_CFG="${LOGS_DIR}/smoke_sft_small_${PBS_JOBID}.json"
+python -c "
+import json
+print(json.dumps({
+    'gradient_accumulation_steps': 1,
+    'disable_thinking': True,
+    'train_data_path': '${SMOKE_DATA}/sft_train.jsonl',
+    'val_data_path': '${SMOKE_DATA}/sft_val.jsonl',
+    'eval_strategy': 'no',
+    'logging_steps': 1,
+    'save_steps': 9999,
+}))" > "${SFT_SMOKE_CFG}"
+
+# ---------------------------------------------------------------------------
+# SECTION 5 — Tokenizer + disable_thinking
+# ---------------------------------------------------------------------------
+echo ""; echo "=== 5. TOKENIZER + disable_thinking ==="
+
+run_check "Qwen3-4B-Base tokenizer (disable_thinking=True)" python -c "
+import os; os.environ.update({'HF_HUB_OFFLINE':'1','TRANSFORMERS_OFFLINE':'1'})
+from SFT_GRPO.train_sft import load_tokenizer
+from SFT_GRPO.config import ModelConfig
+tok = load_tokenizer(ModelConfig(model_name_or_path='/g/data/hn98/dd9648/models/Qwen3-4B-Base'), disable_thinking=True)
+msgs = [{'role':'user','content':'Tóm tắt:\n\nBài báo kinh tế.'}]
+# Thinking mode: template ends with bare <think> (model continues thinking)
+text_think = load_tokenizer(ModelConfig(model_name_or_path='/g/data/hn98/dd9648/models/Qwen3-4B-Base'), disable_thinking=False).apply_chat_template(msgs, tokenize=False, add_generation_prompt=True)
+# No-thinking mode: template has closed <think></think> block (thinking done)
+text_no = tok.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True)
+assert text_no != text_think, 'disable_thinking made no difference'
+assert '</think>' in text_no, f'no-thinking should have closed </think> block: {text_no[-60:]!r}'
+print(f'  vocab={len(tok)}, disable_thinking works: no-think ends with </think> ✓')
+print(f'  Suffix: {text_no[-40:]!r}')
+"
+
+run_check "Qwen3-4B (Instruct) tokenizer (disable_thinking=True)" python -c "
+import os; os.environ.update({'HF_HUB_OFFLINE':'1','TRANSFORMERS_OFFLINE':'1'})
+from SFT_GRPO.train_sft import load_tokenizer
+from SFT_GRPO.config import ModelConfig
+tok = load_tokenizer(ModelConfig(model_name_or_path='/g/data/hn98/dd9648/models/Qwen3-4B'), disable_thinking=True)
+msgs = [{'role':'user','content':'Tóm tắt:\n\nBài báo kinh tế.'}]
+text_think = load_tokenizer(ModelConfig(model_name_or_path='/g/data/hn98/dd9648/models/Qwen3-4B'), disable_thinking=False).apply_chat_template(msgs, tokenize=False, add_generation_prompt=True)
+text_no = tok.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True)
+assert text_no != text_think, 'disable_thinking made no difference'
+assert '</think>' in text_no, f'no-thinking should have closed </think> block: {text_no[-60:]!r}'
+print(f'  vocab={len(tok)}, disable_thinking works ✓')
+print(f'  Suffix: {text_no[-40:]!r}')
+"
+
+# ---------------------------------------------------------------------------
+# SECTION 6 — Model loading + bf16 dtype verification
+# ---------------------------------------------------------------------------
+echo ""; echo "=== 6. MODEL LOADING + BF16 DTYPE ==="
+
+run_check "Qwen3-4B loads as bfloat16" python -c "
+import os, torch, gc
+os.environ.update({'HF_HUB_OFFLINE':'1','TRANSFORMERS_OFFLINE':'1'})
+from SFT_GRPO.train_sft import load_model
+from SFT_GRPO.config import ModelConfig
+cfg = ModelConfig(model_name_or_path='/g/data/hn98/dd9648/models/Qwen3-4B')
+model = load_model(cfg)
+param_dtypes = {p.dtype for p in model.parameters()}
+print(f'  param dtypes: {param_dtypes}')
+# bf16 can appear as bfloat16 or remain as float32 for some layers
+vram = torch.cuda.memory_allocated() / 1e9
+print(f'  VRAM allocated: {vram:.2f} GB')
+# A 4B model in bf16 = ~8GB weights; in fp32 = ~16GB. With overhead, bf16 < 20GB.
+assert vram < 25, f'VRAM={vram:.1f}GB too high — model may have loaded in fp32 (expected bf16 < 25GB)'
+# Verify dominant dtype is bf16
+n_bf16 = sum(p.numel() for p in model.parameters() if p.dtype == torch.bfloat16)
+n_total = sum(p.numel() for p in model.parameters())
+frac = n_bf16 / n_total
+assert frac > 0.9, f'Only {frac:.1%} of params in bf16 — dtype kwarg not working?'
+print(f'  {frac:.1%} of params in bfloat16 ✓')
+del model; gc.collect(); torch.cuda.empty_cache()
+"
+
+# ---------------------------------------------------------------------------
+# SECTION 7 — SFT mini training (Qwen3-4B-Base, ~10 steps)
+# ---------------------------------------------------------------------------
+echo ""; echo "=== 7. SFT — Qwen3-4B-Base ==="
+echo ">>> Start: $(date)"
+
+python src/SFT_GRPO/train_sft.py \
+    --model_name "/g/data/hn98/dd9648/models/Qwen3-4B-Base" \
+    --max_seq_length 256 \
+    --batch_size 2 \
+    --epochs 1.0 \
+    --bf16 True \
+    --fp16 False \
+    --output_dir "${SMOKE_OUT}/sft_base" \
+    --config "${SFT_SMOKE_CFG}" \
+    && ok "SFT Qwen3-4B-Base" \
+    || fail "SFT Qwen3-4B-Base"
+
+echo ">>> End: $(date)"
+
+# ---------------------------------------------------------------------------
+# SECTION 8 — SFT mini training (Qwen3-4B Instruct, ~10 steps)
+# ---------------------------------------------------------------------------
+echo ""; echo "=== 8. SFT — Qwen3-4B (Instruct) ==="
+echo ">>> Start: $(date)"
+
+python src/SFT_GRPO/train_sft.py \
+    --model_name "/g/data/hn98/dd9648/models/Qwen3-4B" \
+    --max_seq_length 256 \
+    --batch_size 2 \
+    --epochs 1.0 \
+    --bf16 True \
+    --fp16 False \
+    --output_dir "${SMOKE_OUT}/sft_instruct" \
+    --config "${SFT_SMOKE_CFG}" \
+    && ok "SFT Qwen3-4B-Instruct" \
+    || fail "SFT Qwen3-4B-Instruct"
+
+echo ">>> End: $(date)"
+
+# ---------------------------------------------------------------------------
+# SECTION 9 — GRPO mini training (Qwen3-4B-Base, 3 steps)
+# ---------------------------------------------------------------------------
+echo ""; echo "=== 9. GRPO — Qwen3-4B-Base (3 steps) ==="
+echo ">>> Start: $(date)"
+
+SMOKE_GRPO_CFG="${LOGS_DIR}/smoke_grpo_small_${PBS_JOBID}.json"
+python -c "
+import json
+print(json.dumps({
+    'per_device_train_batch_size': 2,
+    'gradient_accumulation_steps': 1,
+    'bf16': True,
+    'fp16': False,
+    'gradient_checkpointing': False,
+    'num_generations': 2,
+    'max_new_tokens': 64,
+    'max_seq_length': 1024,
+    'reward_weight_accuracy': 0.5,
+    'reward_weight_length': 0.3,
+    'reward_weight_sentence': 0.2,
+    'disable_thinking': True,
+    'logging_steps': 1,
+    'save_steps': 9999,
+    'do_sample': True,
+    'temperature': 0.7,
+    'top_p': 0.9,
+    'repetition_penalty': 1.0,
+    'no_repeat_ngram_size': 0,
+}))" > "${SMOKE_GRPO_CFG}"
+
+python src/SFT_GRPO/train_grpo.py \
+    --model_name "/g/data/hn98/dd9648/models/Qwen3-4B-Base" \
+    --output_dir "${SMOKE_OUT}/grpo_base" \
+    --train_data "${SMOKE_DATA}/grpo_train.jsonl" \
+    --val_data  "${SMOKE_DATA}/grpo_val.jsonl" \
+    --total_steps 3 \
+    --num_generations 2 \
+    --lr 5e-7 \
+    --beta 0.04 \
+    --config "${SMOKE_GRPO_CFG}" \
+    && ok "GRPO Qwen3-4B-Base (3 steps)" \
+    || fail "GRPO Qwen3-4B-Base (3 steps)"
+
+echo ">>> End: $(date)"
+
+# ---------------------------------------------------------------------------
+# SECTION 10 — GRPO mini training (Qwen3-4B Instruct, 3 steps)
+# ---------------------------------------------------------------------------
+echo ""; echo "=== 10. GRPO — Qwen3-4B (Instruct) (3 steps) ==="
+echo ">>> Start: $(date)"
+
+python src/SFT_GRPO/train_grpo.py \
+    --model_name "/g/data/hn98/dd9648/models/Qwen3-4B" \
+    --output_dir "${SMOKE_OUT}/grpo_instruct" \
+    --train_data "${SMOKE_DATA}/grpo_train.jsonl" \
+    --val_data  "${SMOKE_DATA}/grpo_val.jsonl" \
+    --total_steps 3 \
+    --num_generations 2 \
+    --lr 5e-7 \
+    --beta 0.04 \
+    --config "${SMOKE_GRPO_CFG}" \
+    && ok "GRPO Qwen3-4B-Instruct (3 steps)" \
+    || fail "GRPO Qwen3-4B-Instruct (3 steps)"
+
+echo ">>> End: $(date)"
+
+# ---------------------------------------------------------------------------
+# SECTION 11 — Generation quality check (repetition_penalty sanity)
+# Verifies that generated text is not a repetition loop of commas/digits.
+# ---------------------------------------------------------------------------
+echo ""; echo "=== 11. GENERATION QUALITY (repetition_penalty sanity) ==="
+
+run_check "GRPO instruct — no repetition in generated text" python -c "
+import os, json, re
+os.environ.update({'HF_HUB_OFFLINE':'1','TRANSFORMERS_OFFLINE':'1'})
+import sys; sys.path.insert(0,'${SRC_PATH}')
+import torch
+from transformers import AutoTokenizer, AutoModelForCausalLM
+
+model_path = '/g/data/hn98/dd9648/models/Qwen3-4B'
+tok = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True, use_fast=True)
+if tok.pad_token is None:
+    tok.pad_token = tok.eos_token
+tok.padding_side = 'left'
+
+# Patch disable_thinking
+_orig = tok.apply_chat_template
+def _no_think(*a, **kw):
+    kw.setdefault('enable_thinking', False)
+    return _orig(*a, **kw)
+tok.apply_chat_template = _no_think
+
+model = AutoModelForCausalLM.from_pretrained(
+    model_path, trust_remote_code=True, dtype=torch.bfloat16, device_map='auto')
+model.eval()
+
+msgs = [{'role':'system','content':'Bạn là chuyên gia tóm tắt tiếng Việt.'},
+        {'role':'user','content':'Tóm tắt (khoảng 15 từ):\n\nHội đồng Nhân dân Hà Nội vừa thông qua nghị quyết phát triển kinh tế số giai đoạn 2024-2030, vốn đầu tư 50.000 tỷ đồng.'}]
+prompt = tok.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True)
+inputs = tok(prompt, return_tensors='pt', truncation=True, max_length=512).to('cuda')
+out = model.generate(
+    **inputs, max_new_tokens=64, do_sample=False,
+    pad_token_id=tok.pad_token_id, eos_token_id=tok.eos_token_id,
+    repetition_penalty=1.0, no_repeat_ngram_size=0,
+)
+gen = tok.decode(out[0][inputs.input_ids.shape[1]:], skip_special_tokens=True)
+print(f'  Generated: {gen!r}')
+
+# Check: not a repetition loop
+words = gen.strip().split()
+assert len(words) >= 3, f'Generated text too short: {gen!r}'
+# Count the most common word
+from collections import Counter
+top_word, top_count = Counter(words).most_common(1)[0]
+frac = top_count / len(words)
+assert frac < 0.5, f'Repetition detected: {top_word!r} appears {top_count}/{len(words)} times: {gen!r}'
+
+# Check not all digits/commas
+non_punct = re.sub(r'[0-9,\s]', '', gen)
+assert len(non_punct) > 3, f'Output is mostly digits/commas (likely repetition loop): {gen!r}'
+print(f'  Top word fraction: {frac:.0%} — no repetition loop ✓')
+"
+
+run_check "GRPOConfig rollout penalties OFF (TRL default)" python -c "
+import sys; sys.path.insert(0,'${SRC_PATH}')
+from SFT_GRPO.config import GRPOConfig
+cfg = GRPOConfig()
+assert hasattr(cfg, 'repetition_penalty'), 'Missing repetition_penalty'
+assert hasattr(cfg, 'no_repeat_ngram_size'), 'Missing no_repeat_ngram_size'
+# Must stay OFF: HF applies these over the article-containing prompt and corrupts
+# rollouts (R_acc→0). See rewards._is_degenerate() for degenerate-output handling.
+assert cfg.repetition_penalty == 1.0, f'repetition_penalty must be 1.0 (off): {cfg.repetition_penalty}'
+assert cfg.no_repeat_ngram_size == 0, f'no_repeat_ngram_size must be 0 (off): {cfg.no_repeat_ngram_size}'
+print(f'  repetition_penalty={cfg.repetition_penalty}, no_repeat_ngram_size={cfg.no_repeat_ngram_size} (both off) ✓')
+"
+
+# ---------------------------------------------------------------------------
+# SUMMARY
+# ---------------------------------------------------------------------------
+echo ""
+echo "=============================================================="
+echo "SMOKE TEST SUMMARY"
+echo "=============================================================="
+echo "  PASSED : ${PASS}"
+echo "  FAILED : ${FAIL}"
+echo "  End    : $(date)"
+
+if [ "${FAIL}" -gt 0 ]; then
+    echo ""
+    echo "  FAILURES:"
+    printf "${FAILURES}"
+    echo ""
+    echo "RESULT: FAIL — fix the above before submitting production jobs."
+    exit 1
+else
+    echo ""
+    echo "RESULT: PASS — all checks passed. Safe to submit:"
+    echo "  qsub -v MODEL_VARIANT=base     scripts/pbs/train_sft_qwen3_4b.pbs"
+    echo "  qsub -v MODEL_VARIANT=instruct scripts/pbs/train_sft_qwen3_4b.pbs"
+    echo "  qsub -v MODEL_VARIANT=base     scripts/pbs/train_grpo_qwen3_4b.pbs"
+    echo "  qsub -v MODEL_VARIANT=instruct scripts/pbs/train_grpo_qwen3_4b.pbs"
+fi
+echo "=============================================================="

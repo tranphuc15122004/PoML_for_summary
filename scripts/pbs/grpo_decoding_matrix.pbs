@@ -1,0 +1,21 @@
+#!/bin/bash
+#PBS -N poml_grpo_matrix
+#PBS -q gpuhopper
+#PBS -l ncpus=12,ngpus=1,mem=120gb
+#PBS -l walltime=01:00:00
+#PBS -P hn98
+#PBS -l storage=scratch/jp09+scratch/li96+gdata/hn98
+#PBS -o /scratch/jp09/dd9648/PoML_for_summary/logs/grpo_decoding_matrix.out
+#PBS -j oe
+
+set -euo pipefail
+PROJECT_ROOT="/scratch/jp09/dd9648/PoML_for_summary"
+cd "${PROJECT_ROOT}"
+source "${PROJECT_ROOT}/.venv/bin/activate"
+export PYTHONPATH="${PROJECT_ROOT}/src:${PYTHONPATH:-}"
+export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 TOKENIZERS_PARALLELISM=false
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+
+echo "=== GRPO decoding matrix | $(hostname) | $(nvidia-smi --query-gpu=name --format=csv,noheader|head -1) | $(date) ==="
+python scripts/tools/grpo_decoding_matrix.py
+echo "=== End: $(date) ==="

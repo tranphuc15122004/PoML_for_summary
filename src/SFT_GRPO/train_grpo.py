@@ -36,6 +36,11 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 import torch.nn.functional as F
+
+# Enable expandable memory segments to reduce CUDA fragmentation on H200/A100.
+# This allows PyTorch's allocator to grow segments on demand instead of
+# fragmenting the CUDA arena. Must be set before any torch.cuda call.
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 from accelerate import Accelerator
 from torch.utils.data import DataLoader, Dataset
 from tqdm.auto import tqdm
@@ -157,62 +162,94 @@ def calibrate_grpo_batch_size(
     ref_model.eval()
 
     def _probe_prompt(batch_size: int) -> int:
-        """Probe peak VRAM for one train step with batch_size prompts."""
+        """Probe peak VRAM for forward passes only (no backward).
+
+        Running backward on the raw model (before accelerator.prepare) can leave
+        grad state that interferes with training. We measure forward-only memory
+        and apply a backward_factor in the extrapolation instead.
+        """
         torch.cuda.empty_cache()
         gc.collect()
         torch.cuda.reset_peak_memory_stats()
 
-        # Create dummy prompt tokens
-        prompt_ids = torch.randint(100, 2000, (batch_size, 256), device="cuda")
-        prompt_mask = torch.ones_like(prompt_ids)
+        # Use full intended lengths: logit tensor scales as B*K × seq_len × vocab.
+        prompt_len = max_seq_length - max_new_tokens
+        gen_len = max_new_tokens
 
-        # Rollout: generate (giả lập bằng forward + tạo thêm tokens)
-        gen_len = min(max_new_tokens, 64)  # probe với gen ngắn
+        prompt_ids = torch.randint(100, 2000, (batch_size, prompt_len), device="cuda")
         dummy_gen = torch.randint(100, 2000, (batch_size * num_generations, gen_len), device="cuda")
         full_ids = torch.cat([prompt_ids.repeat_interleave(num_generations, dim=0), dummy_gen], dim=-1)
         full_mask = torch.ones_like(full_ids)
 
-        # Forward reference model
         with torch.no_grad():
-            ref_model(input_ids=full_ids, attention_mask=full_mask)
+            ref_out = ref_model(input_ids=full_ids, attention_mask=full_mask)
+            del ref_out
+            pol_out = policy_model(input_ids=full_ids, attention_mask=full_mask)
+            gen_logits = pol_out.logits[:, prompt_len - 1: -1]
+            log_probs = torch.nn.functional.log_softmax(gen_logits, dim=-1)
+            del pol_out, gen_logits, log_probs
 
-        # Forward + backward policy model
-        outputs = policy_model(input_ids=full_ids, attention_mask=full_mask)
-        loss = outputs.logits.mean()
-        loss.backward()
-
-        policy_model.zero_grad(set_to_none=True)
         peak = torch.cuda.max_memory_allocated()
 
-        del prompt_ids, prompt_mask, dummy_gen, full_ids, full_mask, outputs, loss
+        del prompt_ids, dummy_gen, full_ids, full_mask
         torch.cuda.empty_cache()
         gc.collect()
         return peak
 
     try:
         mem_1 = _probe_prompt(1)
+        mem_2 = _probe_prompt(2)
     except RuntimeError as exc:
         logger.warning(f"[Calibration] Probe failed ({exc}) — keeping default batch size")
-        if not was_training:
-            policy_model.eval()
         return 1, effective_batch
     finally:
         if not was_training:
             policy_model.eval()
 
-    # Ngoại suy: mem(batch=1) = fixed_overhead + per_prompt
-    # Với GRPO, per_prompt scaling không hoàn toàn tuyến tính do generate,
-    # nhưng dùng linear approximation. Thêm hệ số an toàn 0.85.
+    # Two-point probe: mem_1 = peak for 1 prompt (K gens), mem_2 = peak for 2 prompts.
+    # incremental = true marginal VRAM cost per extra prompt — avoids over-estimating
+    # by treating model weights (16 GB fixed) as "variable" the way mem_1*0.6 did.
+    # The dominant bottleneck is the logit tensor [B*K, seq, vocab] which scales
+    # linearly with B; two-point measurement captures this directly.
+
+    # ----------------------------------------------------------------------
+    # fp32 logits overhead: accelerate's model wrapper converts ALL model
+    # outputs from bf16 → fp32 for loss compatibility.  For Qwen3-4B this
+    # doubles the logits tensor from ~3.7 GB/prompt (bf16) to ~7.5 GB/prompt
+    # (fp32).  The probe runs BEFORE accelerator.prepare(), so this extra
+    # copy is invisible to it — we must add it analytically.
+    # ----------------------------------------------------------------------
+    vocab_size = getattr(policy_model.config, "vocab_size", 152064)
+    _gen_len = max_seq_length  # logits cover full sequence, not just gen portion
+    # Extra bytes per prompt when bf16 logits → fp32 (4−2=2 bytes/element extra)
+    fp32_logits_extra_per_prompt = num_generations * _gen_len * vocab_size * 2
+    # For Qwen3-4B (vocab=152064): 4×3072×152064×2 ≈ 3.74 GB/prompt extra.
+
+    # overhead corrected for fp32 logits copy on the first batch unit as well
+    overhead = mem_1 + fp32_logits_extra_per_prompt
+    incremental_fwd = max(mem_2 - mem_1, 100_000_000)  # floor at 100 MB
+
+    # KV cache during generate(): K gens × full_seq × layers × kv_heads × head_dim × 4 bytes
+    # For Qwen3-4B: ~36 layers, 8 KV heads, head_dim=128, per prompt ≈ 1.8 GB
+    kv_cache_per_prompt = num_generations * max_seq_length * 36 * 8 * 128 * 4
+
+    # With GC=True, backward recomputes the logit tensor (same size as forward peak)
+    # plus gradient tensors for the gen portion — factor ≈ 1.5 is appropriate.
+    backward_factor = 1.5
     safety = 0.85
-    per_prompt = mem_1 * 0.6  # ước lượng: ~60% của mem_1 là per-prompt chi phí
-    overhead = mem_1 - per_prompt
+
+    per_prompt = (incremental_fwd + fp32_logits_extra_per_prompt) * backward_factor + kv_cache_per_prompt
 
     available = target_bytes - overhead - optimizer_mem
-    optimal_batch = max(1, int(available / max(per_prompt, 1) * safety))
+    # overhead already covers 1 batch unit; remaining fits max_extra more
+    max_extra = max(0, int(available / max(per_prompt, 1) * safety))
+    # Hard-cap at 6 to prevent runaway batch from fp32 logits blow-up
+    optimal_batch = max(1, min(6, 1 + max_extra))
     grad_accum = max(1, round(effective_batch / optimal_batch))
 
     logger.info(
         f"[Calibration] overhead≈{overhead/1e9:.2f} GB | "
+        f"incremental≈{incremental_fwd/1e9:.2f} GB/prompt | "
         f"per_prompt≈{per_prompt/1e9:.3f} GB | "
         f"available={available/1e9:.2f} GB | "
         f"→ batch={optimal_batch} × grad_accum={grad_accum} "
@@ -254,10 +291,17 @@ class GRPOTrainer:
         if self.tokenizer.padding_side != 'left':
             logger.info(f"Setting tokenizer.padding_side from '{self.tokenizer.padding_side}' to 'left'")
             self.tokenizer.padding_side = 'left'
+        # Qwen3/Qwen3.5: disable thinking mode to prevent <think> blocks in rollouts
+        self._disable_thinking = cfg.disable_thinking
+        if self._disable_thinking:
+            logger.info("Thinking mode disabled for Qwen3-family model (GRPO rollouts).")
 
-        # Load policy model (trainable) and reference model (frozen)
+        # Load policy model (trainable) and reference model (frozen).
+        # The reference is the GRPO *initial policy* (base + SFT adapter), not the raw
+        # base model, so the KL term anchors to the SFT start point rather than dragging
+        # the policy back toward base (which caused initial KL of 66–86).
         self.policy_model = self._load_policy_model(resume_checkpoint=resume_from_checkpoint)
-        self.ref_model = self._load_reference_model()
+        self.ref_model = self._load_reference_model(init_adapter=resume_from_checkpoint)
 
         # Data
         self.train_dataset = GRPODataset(cfg.train_data_path)
@@ -316,12 +360,30 @@ class GRPOTrainer:
                     pass
         self.best_val_reward = -float("inf")
 
-        # Persistent metrics logging
+        # Persistent metrics logging + file log
         if self.accelerator.is_main_process:
             self.metrics_tracker = MetricsTracker(output_dir=cfg.output_dir)
             self.metrics_tracker.save_config(cfg.__dict__)
+            # Mirror all logger output to output_dir/train.log so it's readable
+            # with `tail -f` during training (PBS stdout is only flushed at job end).
+            _log_path = os.path.join(cfg.output_dir, "train.log")
+            _fh = logging.FileHandler(_log_path, mode="a", encoding="utf-8")
+            _fh.setFormatter(logging.Formatter("%(asctime)s | %(levelname)s | %(message)s"))
+            logging.getLogger().addHandler(_fh)
+            logger.info(f"File logging enabled: {_log_path}")
         else:
             self.metrics_tracker = None
+
+    # ------------------------------------------------------------------
+    # Chat template helper
+    # ------------------------------------------------------------------
+
+    def _fmt_prompt(self, messages) -> str:
+        """Apply chat template, disabling Qwen3 thinking if configured."""
+        kwargs = {"tokenize": False, "add_generation_prompt": True}
+        if self._disable_thinking:
+            kwargs["enable_thinking"] = False
+        return self.tokenizer.apply_chat_template(messages, **kwargs)
 
     # ------------------------------------------------------------------
     # Model loading
@@ -378,12 +440,38 @@ class GRPOTrainer:
                 task_type="CAUSAL_LM",
             )
             model = get_peft_model(base, lora_config)
+
+        # Gradient checkpointing: saves ~50 GB VRAM by discarding activations
+        # during forward and recomputing them during backward, at ~20% speed cost.
+        # Essential for GRPO which holds 2 models + rollouts on GPU.
+        if self.cfg.gradient_checkpointing:
+            gc_kwargs = self.cfg.gradient_checkpointing_kwargs or {}
+            try:
+                model.gradient_checkpointing_enable(gradient_checkpointing_kwargs=gc_kwargs)
+            except TypeError:
+                model.gradient_checkpointing_enable()
+            model.config.use_cache = False
+            logger.info(f"Gradient checkpointing enabled on policy model (kwargs={gc_kwargs}).")
+
         model.print_trainable_parameters()
         return model
 
-    def _load_reference_model(self) -> AutoModelForCausalLM:
-        """Load reference model (frozen, no gradients)."""
+    def _load_reference_model(self, init_adapter: Optional[str] = None) -> AutoModelForCausalLM:
+        """Load the frozen reference model = the GRPO *initial policy*.
+
+        For SFT-warm-started runs the reference must be base+SFT (the policy's start
+        point), not the raw base model — otherwise the KL penalty pulls the policy away
+        from the SFT solution. When init_adapter points to a LoRA adapter dir, load it on
+        top of the base and merge so the reference sits exactly at the policy init. For
+        fresh runs (no adapter) the reference is the base model, which is correct.
+        """
         model = self._load_quantized_model(self.cfg.model.model_name_or_path)
+        if init_adapter and os.path.isdir(init_adapter):
+            model = PeftModel.from_pretrained(model, init_adapter)
+            model = model.merge_and_unload()
+            logger.info(f"Reference model = base + adapter ({init_adapter}), merged & frozen.")
+        else:
+            logger.info("Reference model = base model (no init adapter — fresh run).")
         model.eval()
         for p in model.parameters():
             p.requires_grad = False
@@ -396,17 +484,14 @@ class GRPOTrainer:
     @torch.no_grad()
     def _generate_completions(
         self, prompts_text: List[str], num_return_sequences: int
-    ) -> Tuple[List[torch.Tensor], List[str], List[List[float]]]:
+    ) -> Tuple[torch.Tensor, List[str]]:
         """Generate completions for a batch of prompts.
 
-        Args:
-            prompts_text: List of prompt strings (already formatted with chat template).
-            num_return_sequences: K completions per prompt.
-
-        Returns:
-            Tuple of (prompt_logprobs, generated_texts, all_token_logprobs_2d)
+        Returns only gen_ids and decoded texts.  Log-probability computation
+        is handled separately in train_step via a forward pass at T=1.0, which
+        keeps old_logprobs and new_logprobs numerically consistent (avoiding
+        overflow from temperature-scaled scores).
         """
-        # Tokenize prompts
         prompt_encodings = self.tokenizer(
             prompts_text,
             padding=True,
@@ -415,44 +500,36 @@ class GRPOTrainer:
             return_tensors="pt",
         ).to(self.accelerator.device)
 
-        # Generate
-        output_ids = self.policy_model.generate(
-            **prompt_encodings,
-            max_new_tokens=self.cfg.max_new_tokens,
-            num_return_sequences=num_return_sequences,
-            temperature=self.cfg.temperature if self.cfg.do_sample else 1.0,
-            top_p=self.cfg.top_p if self.cfg.do_sample else 1.0,
-            do_sample=self.cfg.do_sample,
-            pad_token_id=self.tokenizer.pad_token_id,
-            eos_token_id=self.tokenizer.eos_token_id,
-            return_dict_in_generate=True,
-            output_scores=True,
-        )
+        # Generate in eval mode so LoRA dropout is OFF during rollout. With dropout on
+        # (the main loop keeps the policy in train mode), completions are drawn from a
+        # perturbed distribution that no longer matches the π_θ used for the log-prob/KL
+        # forward passes — an off-policy mismatch that also measurably degrades quality
+        # (R_acc 0.36→0.25 in the decoding-matrix probe). Restore the prior mode after.
+        was_training = self.policy_model.training
+        self.policy_model.eval()
+        try:
+            output_ids = self.policy_model.generate(
+                **prompt_encodings,
+                max_new_tokens=self.cfg.max_new_tokens,
+                num_return_sequences=num_return_sequences,
+                temperature=self.cfg.temperature if self.cfg.do_sample else 1.0,
+                top_p=self.cfg.top_p if self.cfg.do_sample else 1.0,
+                do_sample=self.cfg.do_sample,
+                pad_token_id=self.tokenizer.pad_token_id,
+                eos_token_id=self.tokenizer.eos_token_id,
+                repetition_penalty=self.cfg.repetition_penalty,
+                no_repeat_ngram_size=self.cfg.no_repeat_ngram_size,
+            )
+        finally:
+            if was_training:
+                self.policy_model.train()
 
-        # Extract generated token ids (excluding prompt)
         prompt_len = prompt_encodings.input_ids.shape[1]
-        gen_ids = output_ids.sequences[:, prompt_len:]  # [B*K, gen_len]
+        gen_ids = output_ids[:, prompt_len:]  # [B*K, gen_len]
 
-        # Decode
-        generated_texts = self.tokenizer.batch_decode(
-            gen_ids, skip_special_tokens=True
-        )
+        generated_texts = self.tokenizer.batch_decode(gen_ids, skip_special_tokens=True)
 
-        # Compute log probabilities of generated tokens
-        # logprobs for each generated token
-        logprobs_list = []
-        for seq_idx in range(gen_ids.shape[0]):
-            seq = gen_ids[seq_idx]
-            seq_logprobs = []
-            for step_idx in range(len(seq)):
-                # scores[step_idx] shape: [B*K, vocab_size]
-                logits = output_ids.scores[step_idx][seq_idx]
-                log_probs = F.log_softmax(logits, dim=-1)
-                token_log_prob = log_probs[seq[step_idx]].item()
-                seq_logprobs.append(token_log_prob)
-            logprobs_list.append(seq_logprobs)
-
-        return gen_ids, generated_texts, logprobs_list
+        return gen_ids, generated_texts
 
     # ------------------------------------------------------------------
     # GRPO loss
@@ -460,55 +537,48 @@ class GRPOTrainer:
 
     def _compute_grpo_loss(
         self,
-        old_logprobs: List[List[float]],
-        new_logprobs: List[List[float]],
+        old_logprobs: torch.Tensor,
+        new_logprobs: torch.Tensor,
+        token_ref_logp: torch.Tensor,
         advantages: torch.Tensor,
-        kl_penalty: torch.Tensor,
+        gen_mask: torch.Tensor,
     ) -> Tuple[torch.Tensor, Dict[str, float]]:
-        """Compute GRPO loss (clipped policy gradient + KL).
+        """Vectorized GRPO loss: clipped policy gradient + per-token KL.
 
         Args:
-            old_logprobs: Log probs from rollout policy π_old.
-            new_logprobs: Log probs from current policy π_θ.
-            advantages: Group-normalized advantages [B*K].
-            kl_penalty: KL divergence penalty value.
+            old_logprobs:  [B*K, gen_len] detached, computed at T=1.0 before update.
+            new_logprobs:  [B*K, gen_len] with grad, current policy T=1.0.
+            token_ref_logp: [B*K, gen_len] detached, reference model.
+            advantages:    [B*K] group-normalised.
+            gen_mask:      [B*K, gen_len] bool, 1 for real tokens up to first EOS.
 
         Returns:
-            Tuple of (loss_tensor, loss_dict).
+            (loss_tensor, loss_dict)
         """
-        device = advantages.device
+        # Log importance ratio — clamped to bf16-safe range (exp(10)≈22026 < 65504).
+        log_ratio = (new_logprobs - old_logprobs).clamp(-10.0, 10.0)
+        rho = torch.exp(log_ratio)  # [B*K, gen_len]
 
-        # Compute importance ratio: ρ = exp(log π_θ − log π_old)
-        policy_loss_sum = 0.0
-        n_tokens = 0
+        adv = advantages.unsqueeze(-1)  # [B*K, 1]
+        surr1 = rho * adv
+        surr2 = rho.clamp(1 - self.cfg.epsilon, 1 + self.cfg.epsilon) * adv
+        token_loss = -torch.min(surr1, surr2)  # [B*K, gen_len]
 
-        for i in range(len(old_logprobs)):
-            old_lp = torch.tensor(old_logprobs[i], device=device)
-            # new_logprobs contains tensors (with grad) — stack to preserve gradient
-            new_lp = torch.stack(new_logprobs[i]) if isinstance(new_logprobs[i][0], torch.Tensor) else torch.tensor(new_logprobs[i], device=device)
-            rho = torch.exp(new_lp - old_lp)  # importance ratio per token
-            adv = advantages[i]
+        # Per-token KL — clamped to same bf16-safe range.
+        r = (token_ref_logp - new_logprobs).clamp(-10.0, 10.0)
+        kl_token = torch.exp(r) - r - 1  # [B*K, gen_len]
 
-            # Clipped surrogate objective (per-token)
-            surr1 = rho * adv
-            surr2 = torch.clamp(rho, 1 - self.cfg.epsilon, 1 + self.cfg.epsilon) * adv
+        n_valid = gen_mask.sum().clamp(min=1)
+        policy_loss = (token_loss * gen_mask).sum() / n_valid
+        kl_penalty = (kl_token * gen_mask).sum() / n_valid
 
-            token_loss = -torch.min(surr1, surr2).sum()
-            policy_loss_sum += token_loss
-            n_tokens += len(old_logprobs[i])
-
-        policy_loss = policy_loss_sum / max(n_tokens, 1)
-
-        # Total loss = policy gradient + KL penalty
         total_loss = policy_loss + self.cfg.beta * kl_penalty
 
-        loss_dict = {
+        return total_loss, {
             "loss": total_loss.item(),
             "policy_loss": policy_loss.item(),
             "kl": kl_penalty.item(),
         }
-
-        return total_loss, loss_dict
 
     # ------------------------------------------------------------------
     # Reward computation
@@ -580,49 +650,32 @@ class GRPOTrainer:
         batch_size = len(prompts)
 
         # Format prompts using chat template
-        prompt_texts = []
-        for msg_list in prompts:
-            text = self.tokenizer.apply_chat_template(
-                msg_list, tokenize=False, add_generation_prompt=True
-            )
-            prompt_texts.append(text)
+        prompt_texts = [self._fmt_prompt(msg_list) for msg_list in prompts]
 
-        # 1. ROLLOUT: generate K completions per prompt with π_old
+        # 1. ROLLOUT — generate K completions per prompt
+        expanded_prompts = [pt for pt in prompt_texts for _ in range(num_gen)]
         with torch.no_grad():
-            # Replicate each prompt K times for generation
-            expanded_prompts = []
-            for pt in prompt_texts:
-                expanded_prompts.extend([pt] * num_gen)
+            gen_ids, gen_texts = self._generate_completions(expanded_prompts, num_return_sequences=1)
 
-            gen_ids, gen_texts, old_logprobs = self._generate_completions(
-                expanded_prompts, num_return_sequences=1
-            )
-
-        # 2. REWARD: compute R_total for each completion
-        rewards, reward_details = self._compute_rewards(
-            gen_texts, references, meta_list, num_gen
-        )
-        # Reshape: [B, K]
+        # 2. REWARD
+        rewards, reward_details = self._compute_rewards(gen_texts, references, meta_list, num_gen)
         rewards_2d = rewards.view(batch_size, num_gen)
 
-        # 3. ADVANTAGE: group normalization + length scaling
-        mean_rewards = rewards_2d.mean(dim=-1, keepdim=True)  # [B, 1]
-        std_rewards = rewards_2d.std(dim=-1, keepdim=True) + 1e-8  # [B, 1]
-        advantages_2d = (rewards_2d - mean_rewards) / std_rewards  # [B, K]
+        # 3. ADVANTAGE: group normalization + optional length scaling
+        mean_rewards = rewards_2d.mean(dim=-1, keepdim=True)
+        # Clamp std to avoid dividing by near-zero when all rewards are identical.
+        std_rewards = rewards_2d.std(dim=-1, keepdim=True).clamp(min=0.01)
+        advantages_2d = (rewards_2d - mean_rewards) / std_rewards
 
-        # Scale advantage by length reward: sequences that hit the target length
-        # get a stronger gradient signal — (1 + alpha * R_len) amplifier.
         if self.cfg.length_advantage_alpha > 0.0:
             len_rewards = torch.tensor(
-                [d["length"] for d in reward_details],
-                device=self.accelerator.device,
-            ).view(batch_size, num_gen)  # [B, K]
-            length_scale = 1.0 + self.cfg.length_advantage_alpha * len_rewards
-            advantages_2d = advantages_2d * length_scale
+                [d["length"] for d in reward_details], device=self.accelerator.device,
+            ).view(batch_size, num_gen)
+            advantages_2d = advantages_2d * (1.0 + self.cfg.length_advantage_alpha * len_rewards)
 
         advantages = advantages_2d.flatten()  # [B*K]
 
-        # 4. Compute new logprobs (with gradients) and KL
+        # 4. Build full sequence tensors (shared by all three forward passes)
         prompt_encodings = self.tokenizer(
             expanded_prompts,
             padding=True,
@@ -631,61 +684,68 @@ class GRPOTrainer:
             return_tensors="pt",
         ).to(self.accelerator.device)
 
-        # Compute new logprobs for generated tokens
-        gen_mask = torch.ones(gen_ids.shape, dtype=torch.long, device=self.accelerator.device)
-        full_ids = torch.cat([prompt_encodings.input_ids, gen_ids], dim=-1)
-        attention_mask = torch.cat([prompt_encodings.attention_mask, gen_mask], dim=-1)
-
-        outputs = self.policy_model(
-            input_ids=full_ids,
-            attention_mask=attention_mask,
-        )
-        logits = outputs.logits
-
         prompt_len = prompt_encodings.input_ids.shape[1]
-        gen_logits = logits[:, prompt_len - 1: -1]  # align with generated tokens
-        gen_tokens = gen_ids
+        gen_len = gen_ids.shape[1]
+        attn_gen = torch.ones(gen_ids.shape, dtype=torch.long, device=self.accelerator.device)
+        full_ids = torch.cat([prompt_encodings.input_ids, gen_ids], dim=-1)
+        full_mask = torch.cat([prompt_encodings.attention_mask, attn_gen], dim=-1)
 
-        log_probs = F.log_softmax(gen_logits, dim=-1)
-        new_logprobs_list = []
-        for seq_idx in range(gen_tokens.shape[0]):
-            seq = gen_tokens[seq_idx]
-            # Keep as tensors (not .item()) so gradients flow through
-            seq_logprobs = [log_probs[seq_idx, step_idx, seq[step_idx]]
-                            for step_idx in range(len(seq))]
-            new_logprobs_list.append(seq_logprobs)
+        # EOS mask: 1 for real tokens (up to and including first EOS), 0 for padding after EOS.
+        eos_id = self.tokenizer.eos_token_id
+        gen_mask = torch.zeros(gen_ids.shape, dtype=torch.float, device=self.accelerator.device)
+        for i in range(gen_ids.shape[0]):
+            eos_pos = (gen_ids[i] == eos_id).nonzero(as_tuple=True)[0]
+            end = eos_pos[0].item() + 1 if len(eos_pos) > 0 else gen_len
+            gen_mask[i, :end] = 1.0
 
-        # KL divergence: reference model forward (no gradient)
+        # 5. REF LOGPROBS — reference model forward (no grad, frozen).
         with torch.no_grad():
-            ref_outputs = self.ref_model(
-                input_ids=full_ids,
-                attention_mask=attention_mask,
-            )
-            ref_logits = ref_outputs.logits
-            ref_gen_logits = ref_logits[:, prompt_len - 1: -1]
-            ref_log_probs = F.log_softmax(ref_gen_logits, dim=-1)  # [B*K, gen_len, vocab]
+            ref_out = self.ref_model(input_ids=full_ids, attention_mask=full_mask)
+            ref_gen_logits = ref_out.logits[:, prompt_len - 1: -1]
+            ref_log_probs = F.log_softmax(ref_gen_logits, dim=-1)
+            token_ref_logp = ref_log_probs.gather(-1, gen_ids.unsqueeze(-1)).squeeze(-1).detach()
+            del ref_out, ref_gen_logits, ref_log_probs
+            torch.cuda.empty_cache()
 
-        # Vectorised KL estimator with gradient through policy log_probs:
-        #   KL ≈ exp(log π_ref - log π_θ) - (log π_ref - log π_θ) - 1  per token
-        token_ref_logp = ref_log_probs.gather(-1, gen_tokens.unsqueeze(-1)).squeeze(-1)   # [B*K, gen_len]
-        token_pol_logp = log_probs.gather(-1, gen_tokens.unsqueeze(-1)).squeeze(-1)        # [B*K, gen_len], has grad
-        r = (token_ref_logp - token_pol_logp).clamp(min=-20.0, max=20.0)
-        kl_penalty = (torch.exp(r) - r - 1).mean()  # scalar tensor WITH gradient
+        # 6. NEW LOGPROBS — policy forward with grad (for policy gradient and KL).
+        # Use unwrap_model to bypass accelerate's bf16→fp32 output cast, which would
+        # allocate an extra ~84 GB fp32 logit tensor at batch=12. The PEFT model's weights
+        # and activations are already bf16, so the computation is identical; only the
+        # output cast is skipped. Consistent with the calibration probe (which also calls
+        # the model directly, before accelerator.prepare).
+        new_out = self.accelerator.unwrap_model(self.policy_model)(
+            input_ids=full_ids, attention_mask=full_mask
+        )
+        # .contiguous() creates a 3.7 GB copy of the gen slice instead of a view into the
+        # full 44 GB logit tensor. This lets `del new_out` immediately free the 44 GB buffer;
+        # without it, the autograd graph keeps the full tensor alive for SliceBackward,
+        # causing ~41 GB extra VRAM during the backward pass.
+        new_gen_logits = new_out.logits[:, prompt_len - 1: -1].contiguous()
+        del new_out
+        new_log_probs = F.log_softmax(new_gen_logits, dim=-1)
+        new_logprobs = new_log_probs.gather(-1, gen_ids.unsqueeze(-1)).squeeze(-1)  # has grad
+        del new_gen_logits, new_log_probs
+        torch.cuda.empty_cache()
 
-        # 5. GRPO LOSS
+        # OLD LOGPROBS — on-policy training: generation and optimization use the same
+        # weights (no optimizer step in between), so π_old = π_θ and rho = 1.
+        # Using new_logprobs.detach() as old_lp gives rho = exp(new_lp - const) with
+        # value 1 but gradient = advantages — the correct policy gradient signal.
+        # This avoids an extra forward pass and eliminates the bf16 overflow risk from
+        # temperature-scaled generation scores.
+        old_logprobs = new_logprobs.detach()
+
+        # 7. GRPO LOSS
         loss, loss_dict = self._compute_grpo_loss(
-            old_logprobs,
-            new_logprobs_list,
-            advantages,
-            kl_penalty,
+            old_logprobs, new_logprobs, token_ref_logp, advantages, gen_mask,
         )
 
-        # 6. BACKWARD (optimizer step and zero_grad handled in train() for gradient accumulation)
-        self.accelerator.backward(loss)
+        # 9. BACKWARD — divide by grad_accum so accumulated gradient = mean (not sum).
+        grad_accum = max(1, self.cfg.gradient_accumulation_steps)
+        self.accelerator.backward(loss / grad_accum)
 
-        # Metrics (grad_norm and lr added by train() after the optimizer step)
         mean_len_reward = sum(d["length"] for d in reward_details) / max(len(reward_details), 1)
-        metrics = {
+        return {
             **loss_dict,
             "reward_mean": rewards.mean().item(),
             "reward_std": rewards.std().item(),
@@ -695,7 +755,6 @@ class GRPOTrainer:
             "advantage_mean": advantages.mean().item(),
             "len_scale_mean": 1.0 + self.cfg.length_advantage_alpha * mean_len_reward,
         }
-        return metrics
 
     # ------------------------------------------------------------------
     # Validation
@@ -715,13 +774,10 @@ class GRPOTrainer:
             meta_list = batch["meta"]
             batch_size = len(prompts)
 
-            prompt_texts = [
-                self.tokenizer.apply_chat_template(msg_list, tokenize=False, add_generation_prompt=True)
-                for msg_list in prompts
-            ]
+            prompt_texts = [self._fmt_prompt(msg_list) for msg_list in prompts]
             expanded_prompts = [pt for pt in prompt_texts for _ in range(num_gen)]
 
-            _, gen_texts, _ = self._generate_completions(expanded_prompts, num_return_sequences=1)
+            _, gen_texts = self._generate_completions(expanded_prompts, num_return_sequences=1)
 
             for i in range(batch_size):
                 ref = references[i]
@@ -793,11 +849,13 @@ class GRPOTrainer:
         # Lấy 3 mẫu đầu tiên từ val set
         val_samples = [self.val_dataset[i] for i in range(min(3, len(self.val_dataset)))]
 
+        # eval mode → LoRA dropout off (same rationale as the rollout path).
+        was_training = self.policy_model.training
+        self.policy_model.eval()
+
         log_entries = []
         for sample in val_samples:
-            prompt_text = self.tokenizer.apply_chat_template(
-                sample["prompt"], tokenize=False, add_generation_prompt=True
-            )
+            prompt_text = self._fmt_prompt(sample["prompt"])
             inputs = self.tokenizer(prompt_text, return_tensors="pt", truncation=True,
                                     max_length=self.cfg.max_seq_length - self.cfg.max_new_tokens).to(
                 self.accelerator.device
@@ -809,6 +867,8 @@ class GRPOTrainer:
                 do_sample=False,
                 pad_token_id=self.tokenizer.pad_token_id,
                 eos_token_id=self.tokenizer.eos_token_id,
+                repetition_penalty=self.cfg.repetition_penalty,
+                no_repeat_ngram_size=self.cfg.no_repeat_ngram_size,
             )
             prompt_len = inputs.input_ids.shape[1]
             generated = self.tokenizer.decode(output_ids[0][prompt_len:], skip_special_tokens=True)
@@ -828,6 +888,9 @@ class GRPOTrainer:
             for entry in log_entries:
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
+        if was_training:
+            self.policy_model.train()
+
         logger.info(f"Sample generations saved: {log_file}")
 
     # ------------------------------------------------------------------
@@ -840,6 +903,17 @@ class GRPOTrainer:
         self.policy_model.train()
 
         total_steps = self.cfg.total_steps
+        # When resuming from a checkpoint that already passed total_steps, extend by
+        # total_steps more so the job actually trains rather than exiting immediately.
+        if self.global_step >= total_steps:
+            extended = self.global_step + total_steps
+            logger.warning(
+                f"Resumed from step {self.global_step} which is >= total_steps {total_steps}. "
+                f"Extending total_steps to {extended} (adding {total_steps} more steps)."
+            )
+            total_steps = extended
+            self.cfg.total_steps = extended
+
         grad_accum = max(1, self.cfg.gradient_accumulation_steps)
         progress_bar = tqdm(total=total_steps, desc="GRPO", disable=not self.accelerator.is_main_process,
                             initial=self.global_step)
@@ -871,6 +945,21 @@ class GRPOTrainer:
                 if _accum_step % grad_accum != 0:
                     continue  # accumulate more gradients before stepping
 
+                # NaN guard: skip update if any gradient is non-finite.
+                has_nan_grad = any(
+                    p.grad is not None and not torch.isfinite(p.grad).all()
+                    for p in self.policy_model.parameters() if p.requires_grad
+                )
+                if has_nan_grad:
+                    logger.warning(
+                        f"Step {self.global_step + 1}: NaN/Inf gradients — skipping optimizer step"
+                    )
+                    self.optimizer.zero_grad()
+                    torch.cuda.empty_cache()
+                    _accum_step = 0
+                    _accum_metrics = []
+                    continue
+
                 # Gradient clipping + optimizer step
                 total_norm = torch.nn.utils.clip_grad_norm_(
                     [p for p in self.policy_model.parameters() if p.requires_grad],
@@ -879,6 +968,7 @@ class GRPOTrainer:
                 self.optimizer.step()
                 self.lr_scheduler.step()
                 self.optimizer.zero_grad()
+                torch.cuda.empty_cache()
 
                 self.global_step += 1
                 progress_bar.update(1)

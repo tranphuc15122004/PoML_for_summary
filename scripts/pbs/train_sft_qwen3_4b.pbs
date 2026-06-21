@@ -1,0 +1,207 @@
+#!/bin/bash
+#PBS -N poml_sft_qwen3_4b
+#PBS -q gpuhopper
+#PBS -l ncpus=12,ngpus=1,mem=60gb
+#PBS -l walltime=24:00:00
+#PBS -P li96
+#PBS -l storage=scratch/jp09+scratch/li96+gdata/hn98
+#PBS -o /scratch/jp09/dd9648/PoML_for_summary/logs/sft_qwen3_4b_%j.out
+#PBS -e /scratch/jp09/dd9648/PoML_for_summary/logs/sft_qwen3_4b_%j.err
+#PBS -j oe
+
+# ==============================================================================
+# SFT Training — Qwen3-4B-Base & Qwen3-4B (Instruct)
+# ==============================================================================
+# Usage:
+#   qsub scripts/pbs/train_sft_qwen3_4b.pbs                      # base model
+#   qsub -v MODEL_VARIANT=instruct scripts/pbs/train_sft_qwen3_4b.pbs
+#   qsub -v GPU_MODEL=a100 scripts/pbs/train_sft_qwen3_4b.pbs
+#
+# MODEL_VARIANT:
+#   base     → /g/data/hn98/dd9648/models/Qwen3-4B-Base  (raw pre-trained)
+#   instruct → /g/data/hn98/dd9648/models/Qwen3-4B       (instruction-tuned)
+#
+# All output (models, logs) goes to jp09 scratch.
+# ==============================================================================
+
+set -euo pipefail
+
+PROJECT_ROOT="/scratch/jp09/dd9648/PoML_for_summary"
+VENV_PATH="${PROJECT_ROOT}/.venv"
+SRC_PATH="${PROJECT_ROOT}/src"
+OUTPUT_ROOT="${PROJECT_ROOT}"
+LOGS_DIR="${OUTPUT_ROOT}/logs"
+mkdir -p "${LOGS_DIR}"
+
+# ---------------------------------------------------------------------------
+# Model variant selection
+# ---------------------------------------------------------------------------
+MODEL_VARIANT="${MODEL_VARIANT:-base}"
+case "${MODEL_VARIANT}" in
+    base)
+        LOCAL_MODEL="/g/data/hn98/dd9648/models/Qwen3-4B-Base"
+        ;;
+    instruct)
+        LOCAL_MODEL="/g/data/hn98/dd9648/models/Qwen3-4B"
+        ;;
+    *)
+        echo "ERROR: Unknown MODEL_VARIANT='${MODEL_VARIANT}'. Use: base | instruct"
+        exit 1
+        ;;
+esac
+
+OUTPUT_DIR="${OUTPUT_ROOT}/models/sft_qwen3_4b_${MODEL_VARIANT}"
+
+# ---------------------------------------------------------------------------
+# GPU auto-detect
+# ---------------------------------------------------------------------------
+if [ -z "${GPU_MODEL:-}" ]; then
+    _GPU=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)
+    case "${_GPU}" in
+        *H200*|*Hopper*) GPU_MODEL="h200" ;;
+        *A100*)          GPU_MODEL="a100" ;;
+        *V100*)          GPU_MODEL="v100" ;;
+        *)               GPU_MODEL="a100" ;;
+    esac
+    echo "Auto-detected GPU_MODEL=${GPU_MODEL} from: ${_GPU}"
+fi
+
+# Qwen3.5-4B is ~33% larger than Qwen2.5-3B; start with smaller batches
+# and let auto-calibration find the exact optimal batch size.
+case "${GPU_MODEL}" in
+    h200)
+        DTYPE="bf16"
+        MAX_SEQ_LEN=3072
+        SFT_BATCH=10
+        GRAD_ACCUM=2      # effective_batch=20
+        ;;
+    a100)
+        DTYPE="bf16"
+        MAX_SEQ_LEN=3072
+        SFT_BATCH=6
+        GRAD_ACCUM=3      # effective_batch=18
+        ;;
+    v100)
+        DTYPE="fp16"
+        MAX_SEQ_LEN=2048
+        SFT_BATCH=2
+        GRAD_ACCUM=4      # effective_batch=8
+        ;;
+    *)
+        DTYPE="bf16"
+        MAX_SEQ_LEN=3072
+        SFT_BATCH=6
+        GRAD_ACCUM=3
+        ;;
+esac
+
+mkdir -p "${OUTPUT_DIR}"
+cd "${PROJECT_ROOT}"
+
+# Auto-detect latest checkpoint (jp09 canonical; also check li96 legacy runs).
+RESUME_CKPT=""
+for _dir in \
+    "${OUTPUT_DIR}" \
+    "/scratch/li96/dd9648/PoML_for_summary/models/sft_qwen3_4b_${MODEL_VARIANT}"; do
+    if [ -d "${_dir}" ]; then
+        _ckpt=$(ls -d "${_dir}"/checkpoint-* 2>/dev/null | sort -t- -k2 -n | tail -1) || true
+        if [ -n "${_ckpt}" ]; then
+            RESUME_CKPT="${_ckpt}"
+            break
+        fi
+    fi
+done
+
+echo "=============================================================="
+echo "SFT Training — Qwen3-4B (${MODEL_VARIANT})"
+echo "Job ID:    ${PBS_JOBID}"
+echo "Node:      $(hostname)"
+echo "GPU:       $(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)"
+echo "GPU Model: ${GPU_MODEL}"
+echo "Dtype:     ${DTYPE}"
+echo "Batch:     ${SFT_BATCH} × ${GRAD_ACCUM} = $((SFT_BATCH * GRAD_ACCUM)) eff"
+echo "Max Seq:   ${MAX_SEQ_LEN}"
+echo "Model:     ${LOCAL_MODEL}"
+echo "Output:    ${OUTPUT_DIR}"
+echo "Resume:    ${RESUME_CKPT:-none}"
+echo "Start:     $(date)"
+echo "=============================================================="
+
+source "${VENV_PATH}/bin/activate"
+export PYTHONPATH="${SRC_PATH}:${PYTHONPATH:-}"
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+export HF_DATASETS_CACHE="/scratch/jp09/dd9648/.cache/huggingface/datasets"
+
+# ---------------------------------------------------------------------------
+# flash-attn: rebuild if incompatible with PyTorch 2.12.0+cu130.
+# Gadi has no CUDA 13.0 — use a fake CUDA 13.0 wrapper to satisfy the version
+# check; nvcc 12.9 compiles sm_80/sm_90 correctly.
+# ---------------------------------------------------------------------------
+_FLASH_SRC="${PROJECT_ROOT}/.flash_attn_src/flash_attn-2.8.3.post1.tar.gz"
+if ! python -c "import flash_attn" 2>/dev/null; then
+    echo "flash_attn import failed — rebuilding from local source..."
+    if [ -f "${_FLASH_SRC}" ]; then
+        module load cuda/12.9.0 2>/dev/null || true
+        _FAKE_CUDA="/tmp/fakecuda13_$$"
+        mkdir -p "${_FAKE_CUDA}/bin"
+        cat > "${_FAKE_CUDA}/bin/nvcc" << 'NVCC_WRAPPER'
+#!/bin/bash
+if [[ "$*" == "--version" ]]; then
+    echo "nvcc: NVIDIA (R) Cuda compiler driver"
+    echo "Cuda compilation tools, release 13.0, V13.0.0"
+else
+    exec /apps/cuda/12.9.0/bin/nvcc "$@"
+fi
+NVCC_WRAPPER
+        chmod +x "${_FAKE_CUDA}/bin/nvcc"
+        ln -sf /apps/cuda/12.9.0/include "${_FAKE_CUDA}/include"
+        ln -sf /apps/cuda/12.9.0/lib64 "${_FAKE_CUDA}/lib64"
+        CUDA_HOME="${_FAKE_CUDA}" FLASH_ATTN_CUDA_ARCHS="80;90" MAX_JOBS=4 \
+            pip install "${_FLASH_SRC}" --no-build-isolation --force-reinstall --quiet || true
+        rm -rf "${_FAKE_CUDA}"
+    fi
+    if python -c "import flash_attn" 2>/dev/null; then
+        echo "flash_attn rebuild OK."
+    else
+        echo "WARNING: flash_attn rebuild failed — training will use sdpa (slower but correct)."
+    fi
+fi
+
+# Write per-run config overrides
+OVERRIDE_CFG="${LOGS_DIR}/sft_qwen3_${MODEL_VARIANT}_${PBS_JOBID}.json"
+python -c "import json; print(json.dumps({
+    'gradient_accumulation_steps': ${GRAD_ACCUM},
+    'disable_thinking': True
+}))" > "${OVERRIDE_CFG}"
+
+_SFT_START=$(date +%s)
+echo ">>> Starting SFT training..."
+
+RESUME_ARG=""
+if [ -n "${RESUME_CKPT}" ] && [ -d "${RESUME_CKPT}" ]; then
+    RESUME_ARG="--resume ${RESUME_CKPT}"
+    echo "Resuming from: ${RESUME_CKPT}"
+else
+    echo "Starting from scratch (no checkpoint found)"
+fi
+
+python src/SFT_GRPO/train_sft.py \
+    --model_name "${LOCAL_MODEL}" \
+    --max_seq_length "${MAX_SEQ_LEN}" \
+    --batch_size "${SFT_BATCH}" \
+    --epochs 2.0 \
+    --bf16 "$([ "${DTYPE}" = "bf16" ] && echo True || echo False)" \
+    --fp16 "$([ "${DTYPE}" = "fp16" ] && echo True || echo False)" \
+    --output_dir "${OUTPUT_DIR}" \
+    --config "${OVERRIDE_CFG}" \
+    ${RESUME_ARG}
+
+_SFT_END=$(date +%s)
+_DUR=$((_SFT_END - _SFT_START))
+echo "=============================================================="
+echo "SFT complete. Model: ${OUTPUT_DIR}/final"
+echo "Duration:  $((_DUR / 3600))h $(((_DUR % 3600) / 60))m $((_DUR % 60))s"
+echo "End:       $(date)"
+echo "=============================================================="

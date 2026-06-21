@@ -1,0 +1,316 @@
+#!/bin/bash
+#PBS -N poml_grpo_qwen3_4b
+#PBS -q gpuhopper
+#PBS -l ncpus=12,ngpus=1,mem=60gb
+#PBS -l walltime=24:00:00
+#PBS -P li96
+#PBS -l storage=scratch/jp09+scratch/li96+gdata/hn98
+#PBS -o /scratch/jp09/dd9648/PoML_for_summary/logs/grpo_qwen3_4b_%j.out
+#PBS -e /scratch/jp09/dd9648/PoML_for_summary/logs/grpo_qwen3_4b_%j.err
+#PBS -j oe
+
+# ==============================================================================
+# GRPO Training — Qwen3-4B-Base & Qwen3-4B (Instruct)
+# ==============================================================================
+# Aligns the SFT-fine-tuned Qwen3-4B model with multi-objective RL:
+#   R_acc (ROUGE-L) + R_len (length adherence) + R_sent (sentence count)
+#
+# Usage:
+#   qsub scripts/pbs/train_grpo_qwen3_4b.pbs                                    # base, auto-resume
+#   qsub -v MODEL_VARIANT=instruct scripts/pbs/train_grpo_qwen3_4b.pbs          # instruct, auto-resume
+#   qsub -v INIT=sft,OUTPUT_SUFFIX=_sft scripts/pbs/train_grpo_qwen3_4b.pbs     # fresh start from SFT
+#   qsub -v INIT=fresh,OUTPUT_SUFFIX=_fresh scripts/pbs/train_grpo_qwen3_4b.pbs # fresh LoRA, no SFT
+#   qsub -v LR=3e-7,NUM_GEN=6,TOTAL_STEPS=1200 scripts/pbs/train_grpo_qwen3_4b.pbs
+#
+# INIT:   auto (default) | sft | fresh
+# MODEL_VARIANT:
+#   base     → base weights: Qwen3-4B-Base, SFT: models/sft_qwen3_4b_base/final
+#   instruct → base weights: Qwen3-4B,      SFT: models/sft_qwen3_4b_instruct/final
+# OUTPUT_SUFFIX:
+#   ""        → models/grpo_qwen3_4b_{base|instruct}           (default)
+#   "_sft"    → models/grpo_qwen3_4b_{base|instruct}_sft
+#   "_fresh"  → models/grpo_qwen3_4b_{base|instruct}_fresh
+# ==============================================================================
+
+set -euo pipefail
+
+PROJECT_ROOT="/scratch/jp09/dd9648/PoML_for_summary"
+VENV_PATH="${PROJECT_ROOT}/.venv"
+SRC_PATH="${PROJECT_ROOT}/src"
+OUTPUT_ROOT="${PROJECT_ROOT}"
+LOGS_DIR="${OUTPUT_ROOT}/logs"
+mkdir -p "${LOGS_DIR}"
+
+# ---------------------------------------------------------------------------
+# Model variant selection
+# ---------------------------------------------------------------------------
+MODEL_VARIANT="${MODEL_VARIANT:-base}"
+case "${MODEL_VARIANT}" in
+    base)
+        BASE_MODEL="/g/data/hn98/dd9648/models/Qwen3-4B-Base"
+        _SFT_NAME="sft_qwen3_4b_base"
+        ;;
+    instruct)
+        BASE_MODEL="/g/data/hn98/dd9648/models/Qwen3-4B"
+        _SFT_NAME="sft_qwen3_4b_instruct"
+        ;;
+    *)
+        echo "ERROR: Unknown MODEL_VARIANT='${MODEL_VARIANT}'. Use: base | instruct"
+        exit 1
+        ;;
+esac
+
+# Find SFT checkpoint: final preferred, fall back to latest intermediate checkpoint.
+# Check jp09 first, then li96 (li96 is the canonical output dir for new runs).
+SFT_CHECKPOINT=""
+for _sft_base in \
+    "${PROJECT_ROOT}/models/${_SFT_NAME}" \
+    "/scratch/li96/dd9648/PoML_for_summary/models/${_SFT_NAME}"; do
+    if [ -d "${_sft_base}/final" ]; then
+        SFT_CHECKPOINT="${_sft_base}/final"
+        echo "SFT checkpoint found: ${SFT_CHECKPOINT} (final)"
+        break
+    fi
+    # No final dir — use latest intermediate checkpoint for warm-start
+    _latest=$(ls -d "${_sft_base}"/checkpoint-* 2>/dev/null | sort -t- -k2 -n | tail -1) || true
+    if [ -n "${_latest}" ]; then
+        SFT_CHECKPOINT="${_latest}"
+        echo "SFT checkpoint found: ${SFT_CHECKPOINT} (latest intermediate)"
+        break
+    fi
+done
+if [ -z "${SFT_CHECKPOINT}" ]; then
+    echo "WARNING: No SFT checkpoint found. Starting from base model with fresh LoRA."
+    echo "  (GRPO will still work, but warm-start from SFT is recommended)"
+fi
+
+# GRPO loads the SFT LoRA checkpoint on top of the base model (if available).
+# LOCAL_MODEL = base weights; the LoRA adapter from SFT_CHECKPOINT is loaded via --resume.
+LOCAL_MODEL="${BASE_MODEL}"
+# OUTPUT_SUFFIX allows independent output dirs for parallel runs:
+#   "" (default) → models/grpo_qwen3_4b_{base|instruct}
+#   "_sft"       → models/grpo_qwen3_4b_{base|instruct}_sft
+#   "_fresh"     → models/grpo_qwen3_4b_{base|instruct}_fresh
+OUTPUT_SUFFIX="${OUTPUT_SUFFIX:-}"
+OUTPUT_DIR="${OUTPUT_ROOT}/models/grpo_qwen3_4b_${MODEL_VARIANT}${OUTPUT_SUFFIX}"
+
+# ---------------------------------------------------------------------------
+# Overridable hyper-parameters
+# ---------------------------------------------------------------------------
+LR="${LR:-5e-7}"
+NUM_GEN="${NUM_GEN:-4}"
+BETA="${BETA:-0.15}"
+TEMPERATURE="${TEMPERATURE:-0.7}"
+TOTAL_STEPS="${TOTAL_STEPS:-800}"
+RESUME="${RESUME:-}"
+# INIT controls the starting point:
+#   auto  (default) — resume from latest GRPO checkpoint, else SFT warm-start
+#   sft             — skip GRPO checkpoints, always warm-start from SFT
+#   fresh           — skip all checkpoints, fresh LoRA on base model
+INIT="${INIT:-auto}"
+
+# ---------------------------------------------------------------------------
+# GPU auto-detect
+# ---------------------------------------------------------------------------
+if [ -z "${GPU_MODEL:-}" ]; then
+    _GPU=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)
+    case "${_GPU}" in
+        *H200*|*Hopper*) GPU_MODEL="h200" ;;
+        *A100*)          GPU_MODEL="a100" ;;
+        *V100*)          GPU_MODEL="v100" ;;
+        *)               GPU_MODEL="a100" ;;
+    esac
+    echo "  [auto-detect] GPU_MODEL=${GPU_MODEL} ← ${_GPU}"
+fi
+
+# Qwen3-4B: both policy and reference model are loaded — roughly 2× the
+# memory footprint of SFT. Gradient checkpointing is always on to keep
+# VRAM stable (~80 GB on H200). Calibration will probe and fine-tune.
+case "${GPU_MODEL}" in
+    h200)
+        DTYPE="bf16"
+        BATCH=4
+        GRAD_ACCUM=4   # effective 16 prompts/update
+        ;;
+    a100)
+        DTYPE="bf16"
+        BATCH=2
+        GRAD_ACCUM=8   # effective 16
+        ;;
+    v100)
+        DTYPE="fp16"
+        BATCH=1
+        GRAD_ACCUM=16  # effective 16
+        ;;
+    *)
+        DTYPE="bf16"
+        BATCH=4
+        GRAD_ACCUM=4
+        ;;
+esac
+
+mkdir -p "${OUTPUT_DIR}"
+cd "${PROJECT_ROOT}"
+
+# Resolve starting checkpoint based on INIT mode
+case "${INIT}" in
+    auto)
+        # Auto-detect latest GRPO checkpoint; fall back to SFT warm-start
+        if [ -z "${RESUME:-}" ]; then
+            for _dir in \
+                "${OUTPUT_DIR}" \
+                "/scratch/li96/dd9648/PoML_for_summary/models/grpo_qwen3_4b_${MODEL_VARIANT}"; do
+                if [ -d "${_dir}" ]; then
+                    _ckpt=$(ls -d "${_dir}"/checkpoint-* 2>/dev/null | sort -t- -k2 -n | tail -1) || true
+                    if [ -n "${_ckpt}" ]; then
+                        RESUME="${_ckpt}"
+                        break
+                    fi
+                fi
+            done
+        fi
+        ;;
+    sft)
+        # Ignore any existing GRPO checkpoints; warm-start from SFT only
+        RESUME=""
+        echo "INIT=sft: ignoring GRPO checkpoints, warm-starting from SFT."
+        ;;
+    fresh)
+        # Ignore all checkpoints — fresh LoRA on base model weights
+        RESUME=""
+        SFT_CHECKPOINT=""
+        echo "INIT=fresh: ignoring all checkpoints, starting with fresh LoRA."
+        ;;
+    *)
+        echo "ERROR: Unknown INIT='${INIT}'. Use: auto | sft | fresh"
+        exit 1
+        ;;
+esac
+
+echo "=============================================================="
+echo "GRPO Training — Qwen3-4B (${MODEL_VARIANT})"
+echo "Job ID:    ${PBS_JOBID}"
+echo "Node:      $(hostname)"
+echo "GPU:       $(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)"
+echo "GPU Model: ${GPU_MODEL}"
+echo "Dtype:     ${DTYPE}"
+echo "Batch:     ${BATCH} × ${GRAD_ACCUM} = $((BATCH * GRAD_ACCUM)) eff prompts/step"
+echo "LR:        ${LR}"
+echo "Num gen:   ${NUM_GEN}"
+echo "Beta:      ${BETA}"
+echo "Temp:      ${TEMPERATURE}"
+echo "Steps:     ${TOTAL_STEPS}"
+echo "Init:      ${INIT}"
+echo "Base:      ${LOCAL_MODEL}"
+echo "Output:    ${OUTPUT_DIR}"
+echo "Start:     $(date)"
+echo "=============================================================="
+
+source "${VENV_PATH}/bin/activate"
+export PYTHONPATH="${SRC_PATH}:${PYTHONPATH:-}"
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+export TOKENIZERS_PARALLELISM=false
+export HF_DATASETS_CACHE="/scratch/jp09/dd9648/.cache/huggingface/datasets"
+
+# ---------------------------------------------------------------------------
+# flash-attn: rebuild if incompatible with PyTorch 2.12.0+cu130.
+# Gadi has no CUDA 13.0 — use a fake CUDA 13.0 wrapper to satisfy the version
+# check; nvcc 12.9 compiles sm_80/sm_90 correctly.
+# ---------------------------------------------------------------------------
+_FLASH_SRC="${PROJECT_ROOT}/.flash_attn_src/flash_attn-2.8.3.post1.tar.gz"
+if ! python -c "import flash_attn" 2>/dev/null; then
+    echo "flash_attn import failed — rebuilding from local source..."
+    if [ -f "${_FLASH_SRC}" ]; then
+        module load cuda/12.9.0 2>/dev/null || true
+        _FAKE_CUDA="/tmp/fakecuda13_$$"
+        mkdir -p "${_FAKE_CUDA}/bin"
+        cat > "${_FAKE_CUDA}/bin/nvcc" << 'NVCC_WRAPPER'
+#!/bin/bash
+if [[ "$*" == "--version" ]]; then
+    echo "nvcc: NVIDIA (R) Cuda compiler driver"
+    echo "Cuda compilation tools, release 13.0, V13.0.0"
+else
+    exec /apps/cuda/12.9.0/bin/nvcc "$@"
+fi
+NVCC_WRAPPER
+        chmod +x "${_FAKE_CUDA}/bin/nvcc"
+        ln -sf /apps/cuda/12.9.0/include "${_FAKE_CUDA}/include"
+        ln -sf /apps/cuda/12.9.0/lib64 "${_FAKE_CUDA}/lib64"
+        CUDA_HOME="${_FAKE_CUDA}" FLASH_ATTN_CUDA_ARCHS="80;90" MAX_JOBS=4 \
+            pip install "${_FLASH_SRC}" --no-build-isolation --force-reinstall --quiet || true
+        rm -rf "${_FAKE_CUDA}"
+    fi
+    if python -c "import flash_attn" 2>/dev/null; then
+        echo "flash_attn rebuild OK."
+    else
+        echo "WARNING: flash_attn rebuild failed — training will use sdpa (slower but correct)."
+    fi
+fi
+
+# ---------------------------------------------------------------------------
+# Write per-GPU config overrides
+# ---------------------------------------------------------------------------
+# Compute booleans in shell variables first — single-quoting ${VAR} inside $()
+# prevents expansion, so evaluate the conditionals before entering python -c.
+_BF16=$([ "${DTYPE}" = 'bf16' ] && echo 'True' || echo 'False')
+_FP16=$([ "${DTYPE}" = 'fp16' ] && echo 'True' || echo 'False')
+_GC='True'  # gradient checkpointing always on for GRPO (critical for VRAM)
+
+OVERRIDE_CFG="${LOGS_DIR}/grpo_qwen3_${MODEL_VARIANT}_${PBS_JOBID}.json"
+python -c "
+import json
+print(json.dumps({
+    'per_device_train_batch_size': ${BATCH},
+    'gradient_accumulation_steps': ${GRAD_ACCUM},
+    'bf16': ${_BF16},
+    'fp16': ${_FP16},
+    'gradient_checkpointing': ${_GC},
+    'reward_weight_accuracy': 0.5,
+    'reward_weight_length': 0.3,
+    'reward_weight_sentence': 0.2,
+    'disable_thinking': True,
+    'beta': ${BETA},
+    'temperature': ${TEMPERATURE},
+    'length_advantage_alpha': 0.0,
+}))" > "${OVERRIDE_CFG}"
+
+# ---------------------------------------------------------------------------
+# Build --resume argument
+#   Priority: explicit RESUME > SFT checkpoint > fresh LoRA
+# ---------------------------------------------------------------------------
+RESUME_ARG=""
+if [ -n "${RESUME:-}" ] && [ -d "${RESUME}" ]; then
+    RESUME_ARG="--resume ${RESUME}"
+    echo "Checkpoint: ${RESUME} (resume)"
+elif [ -n "${SFT_CHECKPOINT:-}" ]; then
+    RESUME_ARG="--resume ${SFT_CHECKPOINT}"
+    echo "Checkpoint: ${SFT_CHECKPOINT} (SFT warm-start)"
+else
+    echo "Checkpoint: none (fresh LoRA on base model)"
+fi
+
+# ---------------------------------------------------------------------------
+# GRPO Training
+# ---------------------------------------------------------------------------
+echo ""
+echo ">>> Starting GRPO training..."
+
+python src/SFT_GRPO/train_grpo.py \
+    --model_name "${LOCAL_MODEL}" \
+    --output_dir "${OUTPUT_DIR}" \
+    --lr "${LR}" \
+    --num_generations "${NUM_GEN}" \
+    --beta "${BETA}" \
+    --total_steps "${TOTAL_STEPS}" \
+    --train_data "data/grpo_train.jsonl" \
+    --val_data "data/grpo_val.jsonl" \
+    --config "${OVERRIDE_CFG}" \
+    ${RESUME_ARG}
+
+echo ""
+echo "=============================================================="
+echo "GRPO complete. Model: ${OUTPUT_DIR}/final"
+echo "End: $(date)"
+echo "=============================================================="

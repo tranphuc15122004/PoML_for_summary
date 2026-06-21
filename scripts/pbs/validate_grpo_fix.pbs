@@ -1,0 +1,79 @@
+#!/bin/bash
+#PBS -N poml_grpo_valfix
+#PBS -q gpuhopper
+#PBS -l ncpus=12,ngpus=1,mem=120gb
+#PBS -l walltime=01:00:00
+#PBS -P hn98
+#PBS -l storage=scratch/jp09+scratch/li96+gdata/hn98
+#PBS -o /scratch/jp09/dd9648/PoML_for_summary/logs/validate_grpo_fix.out
+#PBS -j oe
+
+# Validate the GRPO rollout fix end-to-end: warm-start GRPO from the REAL SFT
+# checkpoint, run a few steps with the fixed code, and check that
+#   (1) reward_acc is now >0 (was ≈0),
+#   (2) KL starts near 0 (reference = base+SFT, not base),
+#   (3) logged rollout samples are coherent Vietnamese.
+
+set -euo pipefail
+PROJECT_ROOT="/scratch/jp09/dd9648/PoML_for_summary"
+cd "${PROJECT_ROOT}"
+source "${PROJECT_ROOT}/.venv/bin/activate"
+export PYTHONPATH="${PROJECT_ROOT}/src:${PYTHONPATH:-}"
+export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 TOKENIZERS_PARALLELISM=false
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+
+SFT_CKPT="${PROJECT_ROOT}/models/sft_qwen3_4b_instruct/final"
+OUT="${PROJECT_ROOT}/models/grpo_validate_fix"
+CFG="${PROJECT_ROOT}/logs/validate_grpo_fix_cfg.json"
+rm -rf "${OUT}"; mkdir -p "${OUT}"
+
+# Production-like config, but small/fast and with calibration off for predictability.
+python -c "
+import json
+print(json.dumps({
+    'per_device_train_batch_size': 2,
+    'gradient_accumulation_steps': 1,
+    'auto_calibrate_batch': False,
+    'bf16': True, 'fp16': False,
+    'gradient_checkpointing': True,
+    'num_generations': 4,
+    'max_new_tokens': 80,
+    'max_seq_length': 2048,
+    'reward_weight_accuracy': 0.5,
+    'reward_weight_length': 0.3,
+    'reward_weight_sentence': 0.2,
+    'disable_thinking': True,
+    'beta': 0.15,
+    'logging_steps': 1,
+    'save_steps': 4,
+}))" > "${CFG}"
+
+echo "=== Validate GRPO fix | $(hostname) | $(nvidia-smi --query-gpu=name --format=csv,noheader|head -1) | $(date) ==="
+echo "Warm-start from SFT: ${SFT_CKPT}"
+
+python src/SFT_GRPO/train_grpo.py \
+    --model_name "/g/data/hn98/dd9648/models/Qwen3-4B" \
+    --output_dir "${OUT}" \
+    --train_data "data/grpo_train.jsonl" \
+    --val_data  "data/grpo_val.jsonl" \
+    --total_steps 8 \
+    --num_generations 4 \
+    --lr 5e-7 \
+    --beta 0.15 \
+    --config "${CFG}" \
+    --resume "${SFT_CKPT}"
+
+echo ""
+echo "=== TRAIN METRICS (step, reward_acc, reward_len, reward_mean, kl) ==="
+python -c "
+import csv
+rows=list(csv.DictReader(open('${OUT}/metrics/train_metrics.csv')))
+print(f\"{'step':>5} {'R_acc':>8} {'R_len':>8} {'R_mean':>8} {'kl':>10}\")
+for r in rows:
+    print(f\"{r['step']:>5} {float(r['reward_acc']):>8.4f} {float(r['reward_len']):>8.4f} {float(r['reward_mean']):>8.4f} {float(r['kl']):>10.4f}\")
+"
+echo ""
+echo "=== SAMPLE GENERATIONS (step 8) ==="
+cat "${OUT}"/sample_generations/step_8.jsonl 2>/dev/null || echo "(no sample file)"
+echo ""
+echo "=== End: $(date) ==="

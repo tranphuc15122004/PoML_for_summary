@@ -3,20 +3,27 @@
 #PBS -q gpuhopper
 #PBS -l ncpus=12,ngpus=1,mem=120gb
 #PBS -l walltime=12:00:00
-#PBS -P hn98
-#PBS -l storage=scratch/jp09+gdata/hn98
-#PBS -o /scratch/jp09/dd9648/PoML_for_summary/logs/
+#PBS -P li96
+#PBS -l storage=scratch/jp09+scratch/li96+gdata/hn98
+#PBS -o /scratch/jp09/dd9648/PoML_for_summary/logs/eval_%j.out
+#PBS -e /scratch/jp09/dd9648/PoML_for_summary/logs/eval_%j.err
 #PBS -j oe
 
 # ==============================================================================
 # Evaluate all trained summarization models on the test set.
-# Supports any model via environment variables.
+# Auto-discovers checkpoints that exist under models/; skips missing paths.
 #
 # Submit:
-#   qsub scripts/pbs/eval.pbs                                    # full eval
-#   qsub -v QUICK=1 scripts/pbs/eval.pbs                         # quick test
-#   qsub -v FAMILIES=qwen3.5 scripts/pbs/eval.pbs                # specific family
-#   qsub -v MODEL_PATHS="a=/path/a,b=/path/b" scripts/pbs/eval.pbs
+#   qsub scripts/pbs/eval.pbs                                       # full eval, all families
+#   qsub -v QUICK=1 scripts/pbs/eval.pbs                            # 20 samples, no BARTScore
+#   qsub -v FAMILIES=qwen3 scripts/pbs/eval.pbs                     # qwen3_base + qwen3_instruct
+#   qsub -v FAMILIES=qwen3_base scripts/pbs/eval.pbs                # only Qwen3-4B-Base family
+#   qsub -v FAMILIES=qwen3_instruct scripts/pbs/eval.pbs            # only Qwen3-4B family
+#   qsub -v FAMILIES=qwen2.5 scripts/pbs/eval.pbs                   # only Qwen2.5 family
+#   qsub -v QUICK=1,FAMILIES=qwen3 scripts/pbs/eval.pbs             # quick + family filter
+#   qsub -v MODEL_PATHS="a=/path/a,b=/path/b" scripts/pbs/eval.pbs  # explicit paths
+#
+# Available FAMILIES: qwen2.5 | qwen3.5 | qwen3_base | qwen3_instruct | qwen3 | all
 # ==============================================================================
 
 set -euo pipefail
@@ -27,9 +34,9 @@ SRC_PATH="${PROJECT_ROOT}/src"
 LOGS_DIR="${PROJECT_ROOT}/logs"
 
 # Overridable via environment variables
-QUICK="${QUICK:-0}"                        # set to 1 for quick test (20 samples)
-FAMILIES="${FAMILIES:-all}"               # all, qwen2.5, qwen3.5
-MODEL_PATHS="${MODEL_PATHS:-}"            # custom "a=path,b=path"
+QUICK="${QUICK:-0}"          # 1 = 20 samples, no BARTScore
+FAMILIES="${FAMILIES:-all}"  # see header for valid values
+MODEL_PATHS="${MODEL_PATHS:-}" # explicit "name=path,..." overrides auto-discovery
 
 mkdir -p "${LOGS_DIR}"
 cd "${PROJECT_ROOT}"
@@ -41,6 +48,7 @@ echo "Node:      $(hostname)"
 echo "GPU:       $(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)"
 echo "Quick:     ${QUICK}"
 echo "Families:  ${FAMILIES}"
+echo "Models:    ${MODEL_PATHS:-auto-discover}"
 echo "Start:     $(date)"
 echo "=============================================================="
 
@@ -51,18 +59,21 @@ export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 export HF_DATASETS_OFFLINE=1
 export TOKENIZERS_PARALLELISM=false
+export HF_DATASETS_CACHE="/scratch/jp09/dd9648/.cache/huggingface/datasets"
+mkdir -p "${HF_DATASETS_CACHE}"
 
 _EVAL_START=$(date +%s)
 
-# Build args
+# Build args — QUICK and FAMILIES are independent (both can be active)
 _ARGS=""
 if [ "${QUICK}" = "1" ]; then
     _ARGS="${_ARGS} --quick"
-elif [ -n "${FAMILIES}" ] && [ "${FAMILIES}" != "all" ]; then
+fi
+if [ -n "${FAMILIES}" ] && [ "${FAMILIES}" != "all" ]; then
     _ARGS="${_ARGS} --families ${FAMILIES}"
 fi
 if [ -n "${MODEL_PATHS}" ]; then
-    _ARGS="${_ARGS} --models \"${MODEL_PATHS}\""
+    _ARGS="${_ARGS} --models ${MODEL_PATHS}"
 fi
 
 echo ">>> Starting evaluation..."
