@@ -446,7 +446,9 @@ def build_all_splits(
         sft_train_raw.append(sample)
         grpo_train_raw.append(sample)
 
-    # VLSP: extractive labels → GRPO only (not suitable as SFT targets)
+    # VLSP: human-written summary (abstractive) available via `summary` field.
+    # Previously used extractive labels; now uses abstractive `summary` by default.
+    # Still GRPO-only because dataset size is small (~300 train).
     logger.info("Loading VLSP/train...")
     try:
         vlsp_train = VLSPDataset(raw_cfg, split="train")

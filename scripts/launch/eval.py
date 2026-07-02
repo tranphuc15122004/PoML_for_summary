@@ -83,20 +83,24 @@ MODEL_FAMILIES = {
     "qwen3_base": {
         "base":  os.path.join(BASE_DIR, "Qwen3-4B-Base"),
         "sft":   os.path.join(MODELS_DIR, "sft_qwen3_4b_base", "final"),
-        # GRPO from base (fresh) — v4 and v5 only (v3 incomplete)
+        # GRPO from base (fresh)
+        "grpo_fresh_v3": os.path.join(MODELS_DIR, "grpo_qwen3_4b_base_fresh_v3", "best"),
         "grpo_fresh_v4": os.path.join(MODELS_DIR, "grpo_qwen3_4b_base_fresh_v4", "final"),
         "grpo_fresh_v5": os.path.join(MODELS_DIR, "grpo_qwen3_4b_base_fresh_v5", "final"),
         # GRPO from SFT checkpoint
+        "grpo_sft_v3":   os.path.join(MODELS_DIR, "grpo_qwen3_4b_base_sft_v3", "best"),
         "grpo_sft_v4":   os.path.join(MODELS_DIR, "grpo_qwen3_4b_base_sft_v4", "final"),
         "grpo_sft_v5":   os.path.join(MODELS_DIR, "grpo_qwen3_4b_base_sft_v5", "final"),
     },
     "qwen3_instruct": {
         "base":  os.path.join(BASE_DIR, "Qwen3-4B"),
         "sft":   os.path.join(MODELS_DIR, "sft_qwen3_4b_instruct", "final"),
-        # GRPO from base (fresh) — v4 and v5 only (v3 incomplete)
+        # GRPO from base (fresh)
+        "grpo_fresh_v3": os.path.join(MODELS_DIR, "grpo_qwen3_4b_instruct_fresh_v3", "best"),
         "grpo_fresh_v4": os.path.join(MODELS_DIR, "grpo_qwen3_4b_instruct_fresh_v4", "final"),
         "grpo_fresh_v5": os.path.join(MODELS_DIR, "grpo_qwen3_4b_instruct_fresh_v5", "final"),
         # GRPO from SFT checkpoint
+        "grpo_sft_v3":   os.path.join(MODELS_DIR, "grpo_qwen3_4b_instruct_sft_v3", "best"),
         "grpo_sft_v4":   os.path.join(MODELS_DIR, "grpo_qwen3_4b_instruct_sft_v4", "final"),
         "grpo_sft_v5":   os.path.join(MODELS_DIR, "grpo_qwen3_4b_instruct_sft_v5", "final"),
     },

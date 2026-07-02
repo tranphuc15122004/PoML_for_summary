@@ -471,7 +471,7 @@ class ViMsDataset(BaseSummarizationDataset):
 # ==============================================================================
 
 class VLSPDataset(BaseSummarizationDataset):
-    """Multi-document extractive summarization from VLSP 2022 AbMuSu shared task.
+    """Multi-document summarization from VLSP 2022 AbMuSu shared task.
 
     Data layout:
         vlsp/vlsp/
@@ -484,10 +484,16 @@ class VLSPDataset(BaseSummarizationDataset):
         {
             "id": int,
             "text": [[title, sent1, sent2, ...], [title, sent1, ...], ...],
-            "label": [flat_index_of_summary_sentences]
+            "summary": [sentence1, sentence2, ...],   # abstractive, human-written
+            "label": [flat_index_of_summary_sentences] # extractive indices
         }
 
-    Note: test.label.jsonl has placeholder labels = [0].
+    Note: test.label.jsonl has placeholder labels = [0] and no summary field.
+
+    Target priority:
+        1. Use `summary` field if present (abstractive, human-written).
+        2. Fall back to `label`-based extraction if `summary` is missing/empty.
+        3. test.label.jsonl has no gold summary → yields empty target.
     """
 
     SPLIT_MAP = {
@@ -529,6 +535,7 @@ class VLSPDataset(BaseSummarizationDataset):
                     continue
 
                 docs = sample.get("text", [])
+                summary = sample.get("summary", [])
                 labels = sample.get("label", [])
 
                 if not docs:
@@ -547,22 +554,25 @@ class VLSPDataset(BaseSummarizationDataset):
                     block = f"[Tài liệu {doc_idx + 1}] {title}\n" + " ".join(sentences)
                     source_parts.append(block)
 
-                    # Build flat sentence index for label resolution
+                    # Build flat sentence index for label resolution (fallback)
                     if title:
                         flat_sentences.append(title)
                     flat_sentences.extend(sentences)
 
                 source = "\n\n---\n\n".join(source_parts)
 
-                # Build target: concatenate selected sentences
-                # Skip placeholder labels (test set has [0])
-                if labels and not (len(labels) == 1 and labels[0] == 0 and self.split == "test"):
+                # Build target:
+                #   1. Prefer human-written `summary` (abstractive) if available.
+                #   2. Fall back to `label`-based extraction (extractive).
+                #   3. test.label.jsonl has placeholder labels — skip.
+                if summary:
+                    target = " ".join(summary)
+                elif labels and not (len(labels) == 1 and labels[0] == 0 and self.split == "test"):
                     summary_sentences = [
                         flat_sentences[i] for i in labels if 0 <= i < len(flat_sentences)
                     ]
                     target = " ".join(summary_sentences)
                 else:
-                    # For test set with placeholder labels, use empty target
                     target = ""
 
                 if source:

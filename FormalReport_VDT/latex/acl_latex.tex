@@ -1,0 +1,726 @@
+% This must be in the first 5 lines to tell arXiv to use pdfLaTeX, which is strongly recommended.
+\pdfoutput=1
+% In particular, the hyperref package requires pdfLaTeX in order to break URLs across lines.
+
+\documentclass[11pt]{article}
+
+% Change "review" to "final" to generate the final (sometimes called camera-ready) version.
+% Change to "preprint" to generate a non-anonymous version with page numbers.
+\usepackage[preprint]{acl}
+
+% Standard package includes
+\usepackage{times}
+\usepackage{latexsym}
+
+% For proper rendering and hyphenation of words containing Latin characters (including in bib files)
+\usepackage[T1]{fontenc}
+% For Vietnamese characters
+\usepackage[T5]{fontenc}
+% See https://www.latex-project.org/help/documentation/encguide.pdf for other character sets
+
+% This assumes your files are encoded as UTF8
+\usepackage[utf8]{inputenc}
+
+% This is not strictly necessary, and may be commented out,
+% but it will improve the layout of the manuscript,
+% and will typically save some space.
+\usepackage{microtype}
+
+% This is also not strictly necessary, and may be commented out.
+% However, it will improve the aesthetics of text in
+% the typewriter font.
+\usepackage{inconsolata}
+
+%Including images in your LaTeX document requires adding
+%additional package(s)
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage[normalem]{ulem}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{amsmath}
+
+
+% If the title and author information does not fit in the area allocated, uncomment the following
+%
+%\setlength\titlebox{<dim>}
+%
+% and set <dim> to something 5cm or larger.
+
+\title{Improving Map-Reduced Approach for Vietnamese Long Document Summarization }
+
+% Author information can be set in various styles:
+% For several authors from the same institution:
+% \author{Author 1 \and ... \and Author n \\
+%         Address line \\ ... \\ Address line}
+% if the names do not fit well on one line use
+%         Author 1 \\ {\bf Author 2} \\ ... \\ {\bf Author n} \\
+% For authors from different institutions:
+% \author{Author 1 \\ Address line \\  ... \\ Address line
+%         \And  ... \And
+%         Author n \\ Address line \\ ... \\ Address line}
+% To start a separate ``row'' of authors use \AND, as in
+% \author{Author 1 \\ Address line \\  ... \\ Address line
+%         \AND
+%         Author 2 \\ Address line \\ ... \\ Address line \And
+%         Author 3 \\ Address line \\ ... \\ Address line}
+\author{ABC \\  University of Information Technology\\ VNUHCM, Vietnam\\ \texttt{abc@gmail.com}
+\And
+Xuan-Dung Doan \\ Viettel Artificial Intelligence Center \\ Viettel Group, Vietnam \\ \texttt{dungdx4@viettel.com.vn}
+}
+
+
+% \author{First Author \\
+%   Affiliation / Address line 1 \\
+%   Affiliation / Address line 2 \\
+%   Affiliation / Address line 3 \\
+%   \texttt{email@domain} \\\And
+%   Second Author \\
+%   Affiliation / Address line 1 \\
+%   Affiliation / Address line 2 \\
+%   Affiliation / Address line 3 \\
+%   \texttt{email@domain} \\}
+
+%\author{
+%  \textbf{First Author\textsuperscript{1}},
+%  \textbf{Second Author\textsuperscript{1,2}},
+%  \textbf{Third T. Author\textsuperscript{1}},
+%  \textbf{Fourth Author\textsuperscript{1}},
+%\\
+%  \textbf{Fifth Author\textsuperscript{1,2}},
+%  \textbf{Sixth Author\textsuperscript{1}},
+%  \textbf{Seventh Author\textsuperscript{1}},
+%  \textbf{Eighth Author \textsuperscript{1,2,3,4}},
+%\\
+%  \textbf{Ninth Author\textsuperscript{1}},
+%  \textbf{Tenth Author\textsuperscript{1}},
+%  \textbf{Eleventh E. Author\textsuperscript{1,2,3,4,5}},
+%  \textbf{Twelfth Author\textsuperscript{1}},
+%\\
+%  \textbf{Thirteenth Author\textsuperscript{3}},
+%  \textbf{Fourteenth F. Author\textsuperscript{2,4}},
+%  \textbf{Fifteenth Author\textsuperscript{1}},
+%  \textbf{Sixteenth Author\textsuperscript{1}},
+%\\
+%  \textbf{Seventeenth S. Author\textsuperscript{4,5}},
+%  \textbf{Eighteenth Author\textsuperscript{3,4}},
+%  \textbf{Nineteenth N. Author\textsuperscript{2,5}},
+%  \textbf{Twentieth Author\textsuperscript{1}}
+%\\
+%\\
+%  \textsuperscript{1}Affiliation 1,
+%  \textsuperscript{2}Affiliation 2,
+%  \textsuperscript{3}Affiliation 3,
+%  \textsuperscript{4}Affiliation 4,
+%  \textsuperscript{5}Affiliation 5
+%\\
+%  \small{
+%    \textbf{Correspondence:} \href{mailto:email@domain}{email@domain}
+%  }
+%}
+
+\begin{document}
+\maketitle
+\begin{abstract}
+Summarizing long documents like books is a major challenge for Large Language Models (LLMs), especially in low-resource languages like Vietnamese where data and specialized models are scarce. Common methods like truncation or basic map-reduce don't work well for long, structured texts, often losing key information or creating incoherent summaries. We propose two new methods to tackle this: a map-reduce with a self-critique loop that uses the LLM to refine its own summaries, and a hierarchical map-reduce that follows the document's structure (like chapters) to build a better summary from the ground up. A major part of our work is the creation of Vn-LongSum, a new benchmark dataset for long Vietnamese text summarization. This dataset contains 150 book-length documents. We created a mix of reference summaries: some written by human experts and others generated by a powerful long-context model. Our tests show that our new methods significantly beat the standard baselines on this new benchmark.
+\end{abstract}
+
+\section{Introduction}
+\label{sec:introduction}
+
+The amount of long-form digital content like books and reports is exploding, creating a need for good automatic summarization \citep{koh2022survey}. Large Language Models (LLMs) are great at text generation, but they have a fixed context window, which makes it hard to process documents longer than that limit \citep{koh2022survey}. Models often struggle with information in the middle of long inputs, a problem known as the ``lost-in-the-middle'' effect \citep{liu2024lost}. This is a big problem for summarizing books where important details can appear anywhere.
+
+Simple solutions aren't good enough. Cutting off text that doesn't fit (truncation) obviously loses a lot of information \citep{koh2022survey}. A more common method is map-reduce, where the document is split into chunks, each is summarized, and then the summaries are combined. But this can lead to a fragmented and repetitive final summary that misses the big picture, a problem particularly pronounced in the summarization of complex, structured narratives. \citep{kim2025nexussum}.
+
+These problems are even harder for low-resource languages like Vietnamese. While benchmark datasets for Vietnamese summarization exist, they have primarily focused on shorter news articles, such as in the VNDS corpus \citep{nguyen2019vnds}, or on multi-document summarization of news clusters, as with the ViMs dataset \citep{tran2020vims}. This has left a notable gap in resources for single-document, long-form abstractive summarization, which our work aims to fill.
+
+To deal with these issues, we created two new methods. The first is a \textbf{map-reduce with self-critique loop}. Here, the LLM acts as its own critic to iteratively improve the summaries it generates, inspired by research on self-correction \citep{kamoi2024llms, madaan2023selfrefine}. The second is a \textbf{hierarchical map-reduce} algorithm. Instead of just splitting the text into random chunks, this method uses the document's actual structure, like chapters and sections, to build summaries from the bottom up. This helps create more coherent final summaries, similar to ideas in recent structure-aware systems \citep{kim2025nexussum}.
+
+A huge hurdle was the lack of a good benchmark. So, we built one: the \textbf{Vn-LongSum} corpus, a new dataset for long-form Vietnamese summarization. Since writing perfect summaries for very long texts is incredibly expensive and slow \citep{koh2022survey}, we used a hybrid approach. The process will be discussed more formally in the Dataset section. In summary, we utilized both available human pre-written summaries if their qualities are acceptable and synthetic data generated by a state-of-the-art model in long context understanding.
+
+In summary, this paper contributes:
+\begin{enumerate}
+    \item A \textbf{map-reduce with self-critique loop} method that uses LLM self-refinement to improve long summaries.
+    \item A \textbf{hierarchical map-reduce} algorithm that uses document structure for more coherent summaries.
+    \item \textbf{Vn-LongSum}, the first large dataset for long Vietnamese text summarization, with very long documents and both human and high-quality synthetic summaries.
+    \item An empirical analysis showing our methods beat standard baselines on our new benchmark.
+\end{enumerate}
+
+\section{The Vn-LongSum Dataset}
+\label{sec:dataset}
+
+We created Vn-LongSum because there were no good public datasets for testing long-form abstractive summarization in Vietnamese \citep{lam2022vietnamese}. Existing datasets were mostly for shorter news articles. We wanted a benchmark that was actually challenging and reflected real-world tasks. That's why we used complex sources like books and long reports, not just simple news articles \citep{koh2022survey}. We collected 150 documents from public Vietnamese literary works, historical texts, from \url{https://thuviensachpdf.com/} and manuals and manually split them into chapters, so each document is a coherent unit. We also curated a smaller, supplementary dataset of 30 short legal documents from \url{https://thuvienphapluat.vn/} to serve as a contrasting domain.
+
+Creating reference summaries for evaluation required a hybrid approach. For 25 documents of 125, we found that they already have pre-written abstractive summaries that are acceptable and thus served as "gold standard" summaries or ground truth. For the other 125 documents which do not have summaries or only have poorly written ones, we used \textbf{Gemini 2.5 Pro} to generate "silver standard" summaries. We chose this model for its top performance on the \textbf{LongBench v2} benchmark \citep{bai2024longbenchv2}, which tests reasoning over long texts, giving us confidence in the synthetic data quality.
+
+
+% To use the provided citations, create a file named `custom.bib` 
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lr}
+\toprule
+\textbf{Metric} & \textbf{Value} \\
+\midrule
+Number of Documents & 150 \\
+Total Tokens & 8,239,499 \\
+Total Words & 5,580,859 \\
+Total Characters & 25,204,859 \\
+Average Tokens / Document & 54,566.22 \\
+Average Words / Document & 36,959.33 \\
+\bottomrule
+\end{tabular}
+\caption{Statistical properties of the Vn-LongSum source document corpus. Token counts are based on a standard generative model tokenizer.}
+\label{tab:dataset_stats}
+\end{table}
+
+% To use the provided citations, create a file named `custom.bib` 
+
+\section{Methodology}
+\label{sec:methodology}
+
+To systematically evaluate long-form summarization for Vietnamese, we implemented and compared five distinct algorithmic strategies. These range from simple baselines to more sophisticated methods that we propose. Each approach offers a different trade-off between computational cost, complexity, and the potential quality of the final summary.
+
+\subsection{Baseline Approaches}
+We selected three widely-recognized techniques as baselines. These methods represent common strategies for adapting standard LLMs to tasks where the input text exceeds their fixed context window.
+
+\subsubsection{Truncated Prompting}
+This is the most direct and computationally inexpensive method. The process is simple: the source document is tokenized and then cut off at the maximum length the model's context window can accommodate, leaving a small buffer for the generated output tokens. The model is then prompted to summarize this truncated portion in a single API call.
+
+The main advantage of this approach is its speed and simplicity. However, it suffers from a critical and obvious flaw: any information located beyond the truncation point is irretrievably lost. This makes it unsuitable for most long-form documents where key information, plot points, or conclusions are not guaranteed to be at the beginning. The summary can only ever be as good as the initial fragment of the document it sees.
+
+\subsubsection{Iterative Refinement}
+This approach processes the entire document sequentially by maintaining a "running summary". First, the document is divided into a series of smaller, potentially overlapping chunks. The model generates an initial summary from the first chunk. Then, for each subsequent chunk, the model is presented with both the current running summary and the new chunk, and is prompted to integrate the new information to update the summary. This process repeats until all chunks have been processed.
+
+This method ensures that the entire document is processed, preventing the information loss seen in truncated prompting. However, it introduces its own set of challenges. The process is inherently sequential and can be slow. More importantly, it is susceptible to a recency bias, where information from later chunks can disproportionately influence the final summary, potentially overwriting or downplaying important details from the beginning of the document. The quality of the final summary is also highly dependent on the quality at each intermediate step; an error or omission early on can be difficult to correct later.
+
+\subsubsection{Map-Reduce}
+A classic divide-and-conquer strategy, map-reduce tackles the length constraint by breaking the problem into smaller, parallelizable pieces. In the "map" phase, the document is split into independent chunks (with or without overlap), and the LLM is called to produce a summary for each chunk in isolation. In the "reduce" phase, these intermediate summaries are grouped together and recursively summarized until only a single, final summary for the entire document remains.
+
+The key benefit of map-reduce is its ability to process the entire document in parallel, making it efficient. However, because each chunk is summarized independently, crucial global context that spans across chunks is lost. This context fragmentation can lead to a final summary that is disjointed, repetitive, or lacks a coherent narrative flow. It might accurately represent the facts within individual sections but fail to capture the overarching argument or theme of the full document.
+
+\subsection{Proposed Approaches}
+Building on the shortcomings of the baselines, we introduce two advanced algorithms based on the map-reduce framework. These methods are designed to improve summary quality by incorporating mechanisms for self-correction and by leveraging the document's inherent structure.
+
+\subsubsection{Map-Reduce with Self-Critique Loop}
+This method enhances the standard map-reduce process by integrating an explicit self-correction cycle. The map phase proceeds as usual. However, during each reduce step, after an initial summary is generated from a group of intermediate summaries, a "critique" phase is initiated. The LLM is prompted to act as a critic, comparing the generated summary against the source summaries it was created from. Its task is to identify specific inaccuracies, omissions, or misrepresentations. The model then uses this generated feedback to produce a refined, more factually complete summary. This generate-critique-refine loop can be repeated for a fixed number of iterations or until the model reports that no further issues can be found.
+
+This approach directly tackles the information loss that can occur during the reduce phase of the standard map-reduce algorithm. By forcing the model to reflect on its own output, it encourages a more deliberate and accurate synthesis of information. The primary trade-off is computational cost, as each critique and refinement step requires an additional LLM call, making it significantly more expensive than the vanilla map-reduce approach.
+
+\subsubsection{Hierarchical Map-Reduce}
+This approach is designed for structured documents and moves beyond naive, fixed-size chunking by explicitly respecting the document's intrinsic semantic structure. To implement this, we first convert the original PDF documents to a structured Markdown format using the Marker tool\footnote{\url{https://github.com/VikParuchuri/marker}}. We then parse this Markdown output with a custom algorithm to build a hierarchical tree for each document. This tree represents its compositional structure with four distinct node types: \texttt{Root}, \texttt{Document}, \texttt{Header}, and \texttt{Paragraph}. Within this structure, \texttt{Paragraph} nodes are always the terminal leaves. The summarization process then proceeds bottom-up. A standard map-reduce algorithm is first applied to the text within the lowest-level nodes (e.g., summarizing all paragraphs within a section). The resulting summary then replaces the original text of that section, effectively collapsing that part of the tree. This process is repeated, moving up the hierarchy until a final, concise summary for the entire document is produced.
+
+By summarizing content within its structural context, this method aims to produce more coherent and logically-structured outputs that preserve the document's natural flow. It mitigates the context fragmentation issue that plagues standard map-reduce. The main limitation of this approach is its reliance on the document having a clear, machine-parsable hierarchical structure. It is highly effective for well-formatted reports, books, or articles, but would be less applicable to unstructured or "flat" text documents.
+
+\section{Experiments and Results}
+\label{sec:experiments}
+
+\subsection{Experimental Setup}
+We conducted experiments on two distinct datasets: the primary \textbf{Vn-LongSum} corpus, comprising 150 long-form documents, and a supplementary \textbf{Law Document} corpus of 30 shorter legal texts. Given the difference in document length, we used a context window of 16,384 tokens for Vn-LongSum and a more constrained 2,048 tokens for the Law dataset. All 150 documents from Vn-LongSum and all 30 from the Law dataset were used for evaluation.
+
+We evaluated four different open-source LLMs, using their quantized versions to ensure efficient processing: \textbf{Gemma3-4B-IT-QAT}, \textbf{Llama3.2-3B}, \textbf{Qwen3-8B}, and \textbf{Phi4-14B}. \citep{gemma-team2024gemma, grattafiori2024llama3, qwen-team2024qwen2.5, gunasekar2023textbooks}.
+
+The hyperparameters for our summarization approaches were set as follows. For map-reduce variants, we used a \textit{chunk\_size} of 12,000 tokens with a \textit{chunk\_overlap} of 200. For iterative refinement, the same chunk and overlap sizes were used. The \textit{Map-Reduce w Self-Critique} and its prompt-optimized version \textit{Improved Self-Critique} were configured with a maximum of 2 critique iterations per step. For the \textit{Hierarchical Map-Reduce} approach, the collapse process was initiated from a \textit{max\_depth} of 1 in the document tree.
+
+We employed a comprehensive suite of metrics to evaluate summary quality. This includes the n-gram-based \textbf{ROUGE} scores (R-1, R-2, and R-L) \citep{lin-2004-rouge}, the semantics-based \textbf{BERTScore} \citep{zhang2019bertscore}, and an LLM-based evaluation using G-Eval \citep{liu2023geval} with GPT-4o-mini to assess \textbf{Correctness} and \textbf{Coherence}.
+
+\subsection{Results on Law Document Dataset}
+The first set of experiments was conducted on the 30 shorter legal documents. The results are shown in Table~\ref{tab:results_law}. A key observation is that the performance differences between the baseline methods and our more advanced critic-based approach are marginal on this dataset. The \textbf{Truncated} approach, often considered the most naive, performs surprisingly well. Paired with the Qwen3-8B model, it achieves the best BERT F1 score (0.758) and the highest LLM Correctness score (0.686). This suggests that for shorter, more formulaic documents like these legal texts, the most critical information is often located near the beginning, mitigating the primary drawback of truncation.
+
+While the self-critique loop method does not consistently outperform the simpler baselines, it does achieve the highest G-Eval coherence score (0.810) when paired with Phi4-14B. This indicates that even when factual recall is similar, the refinement process can help produce a more readable and well-structured summary. Overall, the strong performance of baseline methods implies that the complexity of advanced approaches may not be necessary for corpora with shorter document lengths and rigid structures.
+
+\begin{table*}[htbp]
+\centering
+\small
+\begin{tabular}{llcccccc}
+\toprule
+\multirow{2}{*}{\textbf{Approach}} &
+\multirow{2}{*}{\textbf{Model}}    &
+\multirow{2}{*}{\textbf{R-1 F1}}   &
+\multirow{2}{*}{\textbf{R-2 F1}}   &
+\multirow{2}{*}{\textbf{R-L F1}}   &
+\multirow{2}{*}{\textbf{BERT F1}}  &
+\multicolumn{2}{c}{\textbf{G‑Eval}} \\
+\cmidrule(lr){7-8}                  
+& & & & & & \textbf{Correctness} & \textbf{Coherence} \\
+\midrule
+\multirow{4}{*}{Truncated} & Llama3.2-3B & 0.658 & 0.464 & 0.427 & 0.742 & 0.590 & 0.659 \\
+& Gemma3-4B & 0.703 & \uuline{0.495} & \uuline{0.437} & \uuline{0.750} & \uuline{0.669} & 0.776 \\
+& Qwen3-8B & 0.708 & \textbf{0.499} & \textbf{0.440} & \textbf{0.758} & \textbf{0.686} & 0.779 \\
+& Phi4-14B & \textbf{0.737} & 0.450 & 0.423 & \uuline{0.750} & 0.624 & 0.717 \\
+\midrule
+\multirow{4}{*}{Iterative Refinement} & Llama3.2-3B & 0.690 & 0.466 & 0.414 & 0.713 & 0.541 & 0.714 \\
+& Gemma3-4B & 0.701 & 0.463 & 0.409 & 0.741 & 0.603 & 0.752 \\
+& Qwen3-8B & 0.256 & 0.140 & 0.169 & 0.632 & 0.372 & 0.659 \\
+& Phi4-14B & 0.731 & 0.426 & 0.391 & 0.741 & 0.593 & 0.707 \\
+\midrule
+\multirow{4}{*}{Map-Reduce} & Llama3.2-3B & 0.678 & 0.443 & 0.400 & 0.734 & 0.507 & 0.703 \\
+& Gemma3-4B & 0.691 & 0.454 & 0.384 & 0.747 & 0.634 & \uuline{0.800} \\
+& Qwen3-8B & 0.434 & 0.276 & 0.290 & 0.710 & 0.472 & 0.566 \\
+& Phi4-14B & \uuline{0.732} & 0.436 & 0.403 & 0.745 & 0.607 & 0.731 \\
+\midrule
+\multirow{4}{*}{Map-Reduce w/ Self-Critique} & Llama3.2-3B & 0.641 & 0.386 & 0.368 & 0.718 & 0.524 & 0.797 \\
+& Gemma3-4B & 0.726 & 0.466 & 0.429 & 0.748 & 0.610 & 0.793 \\
+& Qwen3-8B & 0.691 & 0.443 & 0.402 & 0.737 & 0.628 & 0.734 \\
+& Phi4-14B & 0.683 & 0.402 & 0.358 & 0.719 & 0.559 & \textbf{0.810} \\
+\bottomrule
+\end{tabular}
+\caption{Results on the Law Document dataset (30 samples). Best scores are bolded, second best are underlined. Hierarchical Map-Reduce was not applied as the documents lack a clear hierarchical structure. G-Eval scores for Correctness and Coherence is calculated using GPT-4o-mini}
+\label{tab:results_law}
+\end{table*}
+
+\subsection{Results on Vn-LongSum Dataset}
+The results on the 150 long documents from the Vn-LongSum dataset, presented in Table~\ref{tab:results_vnlongsum}, tell a very different story where the benefits of our proposed methods become clear. The standout performer is the Map-Reduce w/ Improved Self-Critique approach. This is a prompt-optimized version of the standard Map-Reduce w/ Self-Critique, when paired with the Phi4-14B model, achieves the highest ROUGE-1 score (0.764) and the best BERT F1 score (0.717). When paired with Qwen3-8B, it achieves the highest LLM G-Eval Correctness score (0.394), demonstrating its superiority in producing factually accurate summaries from long, complex narratives. The success of this method underscores a key finding: a well-designed, iterative refinement loop is crucial for synthesizing information from many disparate chunks of text without losing critical details.
+
+The Hierarchical Map-Reduce approach also yields noteworthy results. Despite producing lower ROUGE scores, its BERT F1 and LLM G-Eval Correctness scores are highly competitive with the other map-reduce variants. This divergence suggests that while the summaries it generates may differ lexically from the references (leading to lower ROUGE), they successfully preserve the core semantic meaning and factual content. This is a strong indicator that leveraging document structure helps in creating high-quality, abstractive summaries that capture the essence of the text, even if they don't use the same exact wording.
+
+\begin{table*}[htbp]
+\centering
+\small
+\begin{tabular}{llcccccc}
+\toprule
+\multirow{2}{*}{\textbf{Approach}} &
+\multirow{2}{*}{\textbf{Model}}    &
+\multirow{2}{*}{\textbf{R-1 F1}}   &
+\multirow{2}{*}{\textbf{R-2 F1}}   &
+\multirow{2}{*}{\textbf{R-L F1}}   &
+\multirow{2}{*}{\textbf{BERT F1}}  &
+\multicolumn{2}{c}{\textbf{G‑Eval}} \\
+\cmidrule(lr){7-8}                  
+& & & & & & \textbf{Correctness} & \textbf{Coherence} \\
+\midrule
+\multirow{4}{*}{Truncated} & Llama3.2-3B & 0.631 & 0.317 & 0.291 & 0.668 & 0.193 & 0.644 \\
+& Gemma3-4B & 0.657 & 0.337 & 0.300 & 0.672 & 0.207 & 0.728 \\
+& Qwen3-8B & 0.665 & 0.353 & 0.298 & 0.678 & 0.227 & 0.768 \\
+& Phi4-14B & 0.689 & 0.356 & 0.295 & 0.686 & 0.222 & 0.807 \\
+\midrule
+\multirow{4}{*}{Iterative Refinement} & Llama3.2-3B & 0.621 & 0.324 & 0.288 & 0.674 & 0.209 & 0.695 \\
+& Gemma3-4B & 0.730 & 0.380 & 0.315 & 0.693 & 0.226 & 0.799 \\
+& Qwen3-8B & 0.652 & 0.353 & 0.298 & 0.682 & 0.237 & 0.814 \\
+& Phi4-14B & 0.751 & 0.391 & 0.312 & 0.701 & 0.244 & 0.805 \\
+\midrule
+\multirow{4}{*}{Map-Reduce} & Llama3.2-3B & 0.671 & 0.348 & 0.305 & 0.685 & 0.228 & 0.685 \\
+& Gemma3-4B & 0.724 & 0.378 & \uuline{0.316} & 0.691 & 0.225 & \textbf{0.838} \\
+& Qwen3-8B & 0.733 & 0.399 & 0.313 & 0.705 & 0.307 & \uuline{0.834} \\
+& Phi4-14B & \uuline{0.752} & 0.391 & 0.312 & 0.700 & 0.274 & 0.827 \\
+\midrule
+\multirow{4}{*}{Hierarchical Map-Reduce} & Llama3.2-3B & 0.440 & 0.250 & 0.240 & 0.680 & 0.248 & 0.479 \\
+& Gemma3-4B & 0.409 & 0.242 & 0.237 & 0.682 & 0.288 & 0.599 \\
+& Qwen3-8B & 0.527 & 0.294 & 0.265 & 0.695 & 0.323 & 0.602 \\
+& Phi4-14B & 0.694 & 0.363 & 0.302 & 0.701 & 0.298 & 0.735 \\
+\midrule
+\multirow{4}{*}{Map-Reduce w/ Self-Critique} & Llama3.2-3B & 0.636 & 0.334 & 0.297 & 0.692 & 0.287 & 0.700 \\
+& Gemma3-4B & 0.500 & 0.285 & 0.265 & 0.680 & 0.290 & 0.775 \\
+& Qwen3-8B & 0.589 & 0.322 & 0.277 & 0.698 & \uuline{0.360} & 0.741 \\
+& Phi4-14B & 0.740 & 0.387 & 0.307 & 0.712 & 0.359 & 0.803 \\
+\midrule
+\multirow{4}{*}{Map-Reduce w/ Impr. Self-Critique} & Llama3.2-3B & 0.722 & 0.379 & 0.313 & 0.708 & 0.297 & 0.688 \\
+& Gemma3-4B & 0.741 & \textbf{0.401} & \textbf{0.317} & \uuline{0.716} & 0.346 & 0.762 \\
+& Qwen3-8B & 0.672 & 0.361 & 0.293 & 0.714 & \textbf{0.394} & 0.754 \\
+& Phi4-14B & \textbf{0.764} & \uuline{0.401} & 0.314 & \textbf{0.717} & 0.341 & 0.781 \\
+\bottomrule
+\end{tabular}
+\caption{Results on the Vn-LongSum dataset (150 samples). Best scores are bolded, second best are underlined. G-Eval scores for Correctness and Coherence is calculated using GPT-4o-mini}
+\label{tab:results_vnlongsum}
+\end{table*}
+
+% To use the provided citations, create a file named `custom.bib` 
+
+\section{Conclusion}
+\label{sec:conclusion}
+
+In this work, we addressed the challenging task of long-form document summarization for the low-resource Vietnamese language. We introduced two novel methods, a Map-Reduce with Self-Critique Loop and a Hierarchical Map-Reduce algorithm, designed to improve upon standard baseline techniques. A key contribution of our work is the creation and release of Vn-LongSum.
+
+Our experiments demonstrate that for complex, book-length documents, our Map-Reduce with Self-Critique Loop significantly outperforms baseline methods across multiple metrics. While our Hierarchical Map-Reduce approach showed lower lexical overlap, its strong performance on semantic metrics suggests it is a promising direction for producing more coherent, structurally-aware summaries.
+
+
+
+
+
+
+% Bibliography entries for the entire Anthology, followed by custom entries
+%\bibliography{anthology,custom}
+% Custom bibliography entries only
+\bibliography{custom}
+
+\appendix
+
+\onecolumn
+
+
+\section{Algorithms and Prompts}
+\label{sec:appendix}
+
+This appendix provides the detailed pseudo-code for the three baseline summarization algorithms used in our experiments, along with the actual prompts employed in our implementation.
+
+\subsection{Algorithm 1: Truncated Prompting}
+
+ 
+\begin{algorithm}
+\caption{Truncated-Prompt Summarisation}
+\label{alg:truncated}
+\begin{algorithmic}[1]
+\State \textbf{Input:} Document $D$, MaxContext $C$, MaxGeneration $L$
+\State \textbf{Output:} Summary $S$
+\State $M \gets C - L$ \Comment{allowance for source tokens}
+\State $T \gets \text{TOKENISE}(D)$ \Comment{sequence of tokens}
+\If{$|T| > M$}
+    \State $T \gets \text{FIRST\_M\_ELEMENTS}(T)$ \Comment{truncate tail}
+\EndIf
+\State $D^* \gets \text{DETOKENISE}(T)$
+\State $P \gets \text{BUILD\_PROMPT}(D^*)$ \Comment{instructions + $D^*$}
+\State $S \gets \text{LLM\_GENERATE}(P, \text{max\_tokens}=L)$
+\State \textbf{return} $S$
+\end{algorithmic}
+\end{algorithm}
+
+\textbf{Implementation Prompt}
+
+The following Vietnamese prompt was used for truncated prompting:
+
+\begin{quote}
+\textit{Bạn là một chuyên gia tóm tắt nội dung.\\
+Vui lòng viết một bản tóm tắt chi tiết cho tài liệu sau bằng \textbf{tiếng Việt}.\\
+\\
+\{text\}\\
+\\
+Lưu ý: Không sử dụng dấu đầu dòng, hãy viết bằng câu đầy đủ và theo đoạn văn.}
+\end{quote}
+
+\subsection{Algorithm 2: Iterative Refinement}
+
+ 
+\begin{algorithm}
+\caption{Iterative-Refinement Summarisation}
+\label{alg:iterative}
+\begin{algorithmic}[1]
+\State \textbf{Input:} Document $D$, ChunkSize $\kappa$, Overlap $\omega \le \kappa$
+\State \textbf{Output:} Summary $S$
+\State $C \gets \text{SPLIT\_INTO\_CHUNKS}(D, \kappa, \omega)$ \Comment{produce sequence $\{C_0, \dots, C_{n-1}\}$}
+\State $S \gets \text{LLM\_GENERATE}(\text{INITIAL\_PROMPT}(C_0))$ \Comment{foundation summary}
+\For{$i \gets 1$ to $n-1$}
+    \State $P \gets \text{REFINE\_PROMPT}(S, C_i)$ \Comment{ask model to integrate new info}
+    \State $S \gets \text{LLM\_GENERATE}(P)$
+\EndFor
+\State \textbf{return} $S$
+\end{algorithmic}
+\end{algorithm}
+
+\textbf{Initial Summary Prompt:}
+
+\begin{quote}
+\textit{Bạn là một chuyên gia phân tích và tóm tắt thông tin.\\
+Nhiệm vụ của bạn là đọc phần đầu tiên của một tài liệu dài và tạo ra một bản tóm tắt \textbf{nền tảng}.\\
+\\
+Bản tóm tắt này phải nắm bắt được những ý chính, bối cảnh và các thông tin quan trọng nhất làm cơ sở cho việc xây dựng một bản tóm tắt toàn diện sau này. Hãy tập trung vào việc xác định các yếu tố cốt lõi (Ai, Cái gì, Khi nào, Ở đâu, Tại sao) được giới thiệu trong đoạn văn này.\\
+\\
+Văn bản cần tóm tắt:\\
+---\\
+\{context\}\\
+---\\
+\\
+Bản tóm tắt nền tảng:}
+\end{quote}
+
+\textbf{Refinement Prompt:}
+
+\begin{quote}
+\textit{Bạn là một biên tập viên xuất sắc, chuyên tổng hợp và tinh chỉnh thông tin từ nhiều nguồn.\\
+Nhiệm vụ của bạn là cập nhật và mở rộng một bản tóm tắt đã có với những thông tin mới.\\
+\\
+Bản tóm tắt hiện có (tóm tắt các phần trước):\\
+---\\
+\{existing\_answer\}\\
+---\\
+\\
+Thông tin mới cần tích hợp (từ phần văn bản tiếp theo):\\
+---\\
+\{context\}\\
+---\\
+\\
+Dựa vào thông tin mới, hãy \textbf{viết lại hoàn toàn} bản tóm tắt để tạo ra một phiên bản mới, mạch lạc và toàn diện hơn.\\
+\\
+\textbf{Yêu cầu quan trọng:}\\
+1. \textbf{Tích hợp, không nối thêm:} Đừng chỉ viết thêm thông tin mới vào cuối. Hãy khéo léo lồng ghép các chi tiết mới vào bản tóm tắt hiện có, sắp xếp lại các câu và ý tưởng để tạo ra một dòng chảy tự nhiên.\\
+2. \textbf{Bảo toàn thông tin cốt lõi:} Đảm bảo rằng những điểm chính và bối cảnh quan trọng từ "Bản tóm tắt hiện có" không bị mất đi hoặc giảm nhẹ tầm quan trọng, trừ khi thông tin mới làm rõ hoặc thay đổi chúng một cách trực tiếp.\\
+3. \textbf{Tổng hợp và cân bằng:} Bản tóm tắt cuối cùng phải phản ánh một cách cân bằng toàn bộ nội dung đã biết cho đến nay, không thiên vị cho thông tin mới nhất.\\
+\\
+Hãy viết bản tóm tắt tổng hợp cuối cùng bằng câu văn hoàn chỉnh, liền mạch thành một đoạn văn bằng tiếng Việt.\\
+\\
+Bản tóm tắt tổng hợp cuối cùng:}
+\end{quote}
+\clearpage
+
+\subsection{Algorithm 3: Map-Reduce}
+
+ 
+\begin{algorithm}
+\caption{Map–Reduce Summarisation}
+\label{alg:mapreduce}
+\begin{algorithmic}[1]
+\State \textbf{Input:} Document $D$, ChunkSize $\kappa$, Overlap $\omega$, TokenBudget $B$
+\State \textbf{Output:} Summary $S$
+\Statex \Comment{\textit{--- Map phase ---}}
+\State $C \gets \text{SPLIT\_INTO\_CHUNKS}(D, \kappa, \omega)$ \Comment{$\{C_0, \dots, C_{n-1}\}$}
+\For{each chunk $C_i$}
+    \State $m_i \gets \text{LLM\_GENERATE}(\text{MAP\_PROMPT}(C_i))$ \Comment{local summary}
+\EndFor
+\State $M \gets \{m_0, \dots, m_{n-1}\}$ \Comment{multiset of partial summaries}
+\Statex \Comment{\textit{--- Reduce phase ---}}
+\While{$\text{TOKEN\_COUNT}(M) > B$}
+    \State $G \gets \text{PARTITION}(M, B)$ \Comment{each group fits within $B$}
+    \State $M \gets \emptyset$
+    \For{each group $g \in G$}
+        \State $r \gets \text{LLM\_GENERATE}(\text{REDUCE\_PROMPT}(g))$
+        \State $\text{ADD}(M, r)$ \Comment{$r$ is shorter than $g$}
+    \EndFor
+\EndWhile
+\State $S \gets \text{LLM\_GENERATE}(\text{REDUCE\_PROMPT}(M))$ \Comment{final merge}
+\State \textbf{return} $S$
+\end{algorithmic}
+\end{algorithm}
+
+\textbf{Map Prompt (for individual chunks):}
+
+\begin{quote}
+\textit{Bạn là một chuyên gia tóm tắt nội dung.\\
+Vui lòng viết một bản tóm tắt chi tiết cho đoạn văn bản sau bằng \textbf{tiếng Việt}.\\
+\\
+\{content\}\\
+\\
+Lưu ý: Không sử dụng dấu đầu dòng, hãy viết bằng câu đầy đủ và theo đoạn văn.}
+\end{quote}
+
+\textbf{Reduce Prompt (for combining summaries):}
+
+\begin{quote}
+\textit{Sau đây là một tập hợp các bản tóm tắt:\\
+\{docs\}\\
+\\
+Hãy tổng hợp và chắt lọc chúng thành một bản tóm tắt cuối cùng, toàn diện về các chủ đề chính bằng tiếng Việt.\\
+Không sử dụng dấu đầu dòng, hãy viết bằng câu đầy đủ và theo đoạn văn.}
+\clearpage
+
+\subsection{Algorithm 4: Map-Reduce with Critique Loop (Prompt-Optimized)}
+
+ 
+\begin{algorithm}
+\caption{Map–Reduce with Critique Loop}
+\label{alg:mapreduce_critique}
+\begin{algorithmic}[1]
+\State \textbf{Input:} Document $D$, ChunkSize $\kappa$, Overlap $\omega$, TokenBudget $B$, MaxCritique $K \ge 1$
+\State \textbf{Output:} Summary $S$
+\Statex \Comment{\textit{--- Map phase (identical to Algorithm 3) ---}}
+\State $C \gets \text{SPLIT\_INTO\_CHUNKS}(D, \kappa, \omega)$
+\For{each chunk $C_i$}
+    \State $m_i \gets \text{LLM\_GENERATE}(\text{MAP\_PROMPT}(C_i))$
+\EndFor
+\State $M \gets \{m_0, \dots, m_{n-1}\}$
+\Statex \Comment{\textit{--- Enhanced Reduce phase ---}}
+\While{$\text{TOKEN\_COUNT}(M) > B$}
+    \State $G \gets \text{PARTITION}(M, B)$ \Comment{$\le B$ tokens per group}
+    \State $M \gets \emptyset$
+    \For{each group $g \in G$}
+        \State $r \gets \text{COLLAPSE\_WITH\_CRITIQUE}(g, K)$
+        \State $\text{ADD}(M, r)$
+    \EndFor
+\EndWhile
+\State $S \gets \text{COLLAPSE\_WITH\_CRITIQUE}(M, K)$ \Comment{final merge}
+\State \textbf{return} $S$
+\end{algorithmic}
+\end{algorithm}
+
+\begin{algorithm}
+\caption{Subroutine: COLLAPSE\_WITH\_CRITIQUE}
+\label{alg:sub_critique}
+\begin{algorithmic}[1]
+\State \textbf{Input:} group $g = \{s_1, \dots, s_m\}$, max critique cycles $K$
+\State \textbf{Output:} refined summary $r$
+\State $r \gets \text{LLM\_GENERATE}(\text{REDUCE\_PROMPT}(g))$ \Comment{initial merge}
+\For{$k \gets 1$ to $K$}
+    \State $\textit{feedback} \gets \text{LLM\_GENERATE}(\text{CRITIQUE\_PROMPT}(r, g))$
+    \If{"no issues" $\in$ \textit{feedback}}
+        \State \textbf{break} \Comment{summary accepted}
+    \EndIf
+    \State $r \gets \text{LLM\_GENERATE}(\text{REFINE\_PROMPT}(r, \textit{feedback}, g))$
+\EndFor
+\State \textbf{return} $r$
+\end{algorithmic}
+\end{algorithm}
+
+\textbf{Map Prompt:}
+\begin{quote}
+\textit{Hãy tóm tắt những thông tin quan trọng từ đoạn văn bản sau bằng tiếng Việt.
+Lưu ý bao gồm đầy đủ các chi tiết quan trọng như sự kiện hay nhân vật, các chủ đề chính. Không bỏ sót thông tin quan trọng. Nên tóm tắt theo từng chương nếu có.\\
+\\
+Chỉ viết nội dung tóm tắt. Không giải thích, không xin lỗi, không nói về quy trình.\\
+\\
+Văn bản:\\
+<content>\\
+\{content\}\\
+</content>\\
+\\
+Tóm tắt:}
+\end{quote}
+
+\textbf{Reduce Prompt:}
+\begin{quote}
+\textit{Sau đây là một tập hợp các bản tóm tắt:\\
+<docs>\\
+\{docs\}\\
+</docs>\\
+\\
+Hãy tổng hợp và chắt lọc chúng thành một bản tóm tắt cuối cùng bằng \textbf{tiếng Việt}\\
+Lưu ý bao gồm đầy đủ các chi tiết quan trọng như sự kiện hay nhân vật, các chủ đề chính. Không bỏ sót thông tin quan trọng.Chỉ viết nội dung tóm tắt. Không giải thích, không xin lỗi, không nói về quy trình.Không sử dụng dấu đầu dòng; hãy viết thành các câu hoàn chỉnh theo đoạn văn.\\
+Tóm tắt mới:}
+\end{quote}
+
+\textbf{Critique Prompt:}
+\begin{quote}
+\textit{So sánh bản tóm tắt với nội dung tham khảo. Có thông tin quan trọng nào bị thiếu hoặc sai không?
+Các thông tin quan trọng bao gồm sự kiện hay nhân vật,các chủ đề chính. Không bỏ sót thông tin quan trọng.\\
+\\
+Bản tóm tắt:\\
+<summary>\\
+\{summary\}\\
+</summary>\\
+\\
+Nội dung tham khảo:\\
+<reference\_content>\\
+\{original\_chunks\}\\
+</reference\_content>\\
+\\
+Nếu không có vấn đề thì trả lời: "Không có vấn đề"\\
+Nếu có vấn đề thì chỉ ra vấn đề cụ thể thật chi tiết và rõ ràng. không cần giải thích, không cần xin lỗi, không cần nói về quy trình.\\
+Ví dụ: "Thiếu thông tin về sự kiện X", "Thiếu thông tin về nhân vật Y"}
+\end{quote}
+
+\textbf{Refine Prompt:}
+\begin{quote}
+\textit{Nhiệm vụ: Viết lại bản tóm tắt để khắc phục các vấn đề đã chỉ ra. Sử dụng nội dung tham khảo để bổ sung thông tin bị thiếu.\\
+Bản tóm tắt hiện tại (cần sửa):\\
+<summary>\\
+\{current\_summary\}\\
+</summary>\\
+\\
+Vấn đề cần khắc phục:\\
+<critique>\\
+\{critique\}\\
+</critique>\\
+\\
+Nội dung tham khảo (để bổ sung thông tin):\\
+<reference\_content>\\
+\{reference\_content\}\\
+</reference\_content>\\
+\\
+Yêu cầu:\\
+- Khắc phục TẤT CẢ các vấn đề đã chỉ ra trong phần critique\\
+- Bổ sung thông tin bị thiếu từ nội dung tham khảo\\
+- Giữ nguyên thông tin đúng đã có trong bản tóm tắt cũ\\
+- Đảm bảo tóm tắt mới có đầy đủ thông tin và chính xác\\
+\\
+Chỉ viết bản tóm tắt đã sửa. Không giải thích, không xin lỗi, không nói về quy trình.\\
+Bản tóm tắt đã sửa:}
+\end{quote}
+
+\subsection{Algorithm 5: Hierarchical Map-Reduce}
+
+ 
+\begin{algorithm}
+\caption{Hierarchical Map–Reduce}
+\label{alg:hierarchical}
+\begin{algorithmic}[1]
+\State \textbf{Input:} Tree $T$, MaxDepth $d_{\text{max}} \ge 1$, MR\_PARAMS $\langle\kappa, \omega, B\rangle$
+\State \textbf{Output:} Summary $S$
+\Statex \Comment{\textit{--- Bottom-up collapse ---}}
+\State $d \gets \text{MIN}(d_{\text{max}}, \text{DEPTH\_OF\_TREE}(T))$
+\For{level $\gets d$ \textbf{down to} $1$}
+    \State $N \gets \text{NON\_LEAF\_NODES\_AT\_DEPTH}(T, \text{level})$ \Comment{headers node only}
+    \For{each node $n \in N$}
+        \State $R \gets \text{COLLECT\_PARAGRAPH\_TEXT}(n)$ \Comment{Combine descendants' paragraphs}
+        \If{$R \ne \emptyset$}
+            \State $s \gets \text{MAP\_REDUCE}(R, \text{MR\_PARAMS})$ \Comment{Algorithm 3 or 4}
+            \State $\text{REPLACE\_SUBTREE\_WITH\_PARAGRAPH}(n, s)$
+            \Comment{Replace as Paragraph node}
+        \Else
+            \State $\text{REPLACE\_SUBTREE\_WITH\_PARAGRAPH}(n, n.\text{title})$
+        \EndIf
+    \EndFor
+\EndFor
+\Statex \Comment{\textit{--- Final document-level summary ---}}
+\State $P \gets \text{CONCATENATE\_ALL\_PARAGRAPHS}(T.\text{root})$
+\State $S \gets \text{MAP\_REDUCE}(P, \text{MR\_PARAMS})$
+\State $S \gets \text{LLM\_GENERATE}(\text{REVIEW\_PROMPT}(S))$ \Comment{optional polishing}
+\State \textbf{return} $S$
+\end{algorithmic}
+\end{algorithm}
+
+\textbf{Map Prompt:}
+\begin{quote}
+\textit{Bạn là một chuyên gia tóm tắt nội dung. Hãy tóm tắt những thông tin quan trọng từ đoạn văn bản sau bằng tiếng Việt. Lưu ý bao gồm đầy đủ các chi tiết quan trọng như sự kiện hay nhân vật, các chủ đề chính. Không bỏ sót thông tin quan trọng.\\
+<content>\\
+\{content\}\\
+</content>\\
+Chỉ viết nội dung tóm tắt. Không giải thích, không xin lỗi, không nói về quy trình.\\
+Tóm tắt:}
+\end{quote}
+
+\textbf{Reduce Prompt:}
+\begin{quote}
+\textit{Sau đây là một tập hợp các bản tóm tắt:\\
+<docs>\\
+\{docs\}\\
+</docs>\\
+\\
+Hãy tổng hợp và chắt lọc chúng thành một bản tóm tắt cuối cùng bằng \textbf{tiếng Việt}\\
+Lưu ý bao gồm đầy đủ các chi tiết quan trọng như sự kiện hay nhân vật, các chủ đề chính. Không bỏ sót thông tin quan trọng.Chỉ viết nội dung tóm tắt. Không giải thích, không xin lỗi, không nói về quy trình.Không sử dụng dấu đầu dòng; hãy viết thành các câu hoàn chỉnh theo đoạn văn.\\
+Tóm tắt mới:}
+\end{quote}
+
+\textbf{Final Review/Polishing Prompt:}
+\begin{quote}
+\textit{Bạn là một biên tập viên chuyên nghiệp.\\
+Dưới đây là bản tóm tắt của một tài liệu:\\
+<summary>\\
+\{summary\}\\
+</summary>\\
+\\
+Hãy rà soát để sửa lỗi ngữ pháp và đảm bảo văn phong mạch lạc, rõ ràng. Không bỏ sót thông tin quan trọng.\\
+không cần giải thích, không cần xin lỗi, không cần nói về quy trình.\\
+Tóm tắt mới:}
+\end{quote}
+
+\section{G-Eval Prompts}
+\label{sec:appendix_geval}
+
+This appendix details the criteria provided to the LLM judge (GPT-4o-mini) for the G-Eval metrics used in our experiments. The model was tasked with scoring the generated summaries on a scale of 1 to 5 for two separate aspects: Correctness and Coherence.
+
+\subsection{Correctness Prompt}
+The prompt for evaluating the factual accuracy and faithfulness of the summary was as follows:
+
+\begin{quote}
+\textbf{Correctness (1-5):} Measures how accurately the generated summary captures the key information and main points from the reference summary.
+\begin{description}
+    \item[Criteria:]
+    \item[-] How much correct information does the generated summary contain compared to the reference summary?
+    \item[-] Does the generated summary contain contradictions with the source document?
+    \item[-] How well does the generated summary cover key points and main themes (or events) with respect to the reference?
+\end{description}
+\end{quote}
+
+\subsection{Coherence Prompt}
+The prompt for evaluating the logical flow and readability of the summary was as follows:
+
+\begin{quote}
+\textbf{Coherence (1-5):} Measures the logical flow, structure, and organization of the generated summary. The summary should:
+\begin{itemize}
+    \item Have a clear and logical structure that flows from sentence to sentence.
+    \item Be well-organized with a coherent progression of ideas.
+    \item Maintain consistency in style and tone throughout.
+    \item Not be just a collection of random facts, but a cohesive narrative.
+    \item Use appropriate transitions and connections between concepts.
+\end{itemize}
+\end{quote}
+
+\end{document}

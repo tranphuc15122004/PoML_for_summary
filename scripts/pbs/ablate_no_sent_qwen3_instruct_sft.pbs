@@ -1,0 +1,172 @@
+#!/bin/bash
+#PBS -N ablate_no_sent_inst_sft
+#PBS -q gpuhopper
+#PBS -l ncpus=12,ngpus=1,mem=60gb
+#PBS -l walltime=24:00:00
+#PBS -P li96
+#PBS -l storage=scratch/jp09+scratch/li96+gdata/hn98
+#PBS -o /scratch/jp09/dd9648/PoML_for_summary/logs/ablate_no_sent_instruct_sft_%j.out
+#PBS -e /scratch/jp09/dd9648/PoML_for_summary/logs/ablate_no_sent_instruct_sft_%j.err
+#PBS -j oe
+
+# ==============================================================================
+# Ablation: No Sentence Reward — Qwen3-4B Instruct, GRPO from SFT checkpoint
+# ==============================================================================
+# Sentence reward weight = 0.0. Only R_acc + R_len used.
+# ==============================================================================
+
+set -euo pipefail
+
+PROJECT_ROOT="/scratch/jp09/dd9648/PoML_for_summary"
+VENV_PATH="${PROJECT_ROOT}/.venv"
+SRC_PATH="${PROJECT_ROOT}/src"
+OUTPUT_ROOT="${PROJECT_ROOT}"
+LOGS_DIR="${OUTPUT_ROOT}/logs"
+mkdir -p "${LOGS_DIR}"
+
+MODEL_VARIANT="instruct"
+BASE_MODEL="/g/data/hn98/dd9648/models/Qwen3-4B"
+OUTPUT_DIR="${OUTPUT_ROOT}/models/ablate_no_sent_qwen3_instruct_sft"
+mkdir -p "${OUTPUT_DIR}"
+cd "${PROJECT_ROOT}"
+
+# SFT checkpoint for warm-start
+SFT_CHECKPOINT="${OUTPUT_ROOT}/models/sft_qwen3_4b_instruct/final"
+if [ ! -d "${SFT_CHECKPOINT}" ]; then
+    echo "ERROR: SFT checkpoint not found at ${SFT_CHECKPOINT}"
+    exit 1
+fi
+echo "SFT checkpoint: ${SFT_CHECKPOINT}"
+
+LOCAL_MODEL="${BASE_MODEL}"
+INIT="sft"
+
+# Hyper-parameters
+LR="${LR:-5e-7}"
+NUM_GEN="${NUM_GEN:-4}"
+BETA="${BETA:-0.15}"
+TEMPERATURE="${TEMPERATURE:-0.7}"
+TOTAL_STEPS="${TOTAL_STEPS:-800}"
+
+# GPU auto-detect
+if [ -z "${GPU_MODEL:-}" ]; then
+    _GPU=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)
+    case "${_GPU}" in
+        *H200*|*Hopper*) GPU_MODEL="h200" ;;
+        *A100*)          GPU_MODEL="a100" ;;
+        *V100*)          GPU_MODEL="v100" ;;
+        *)               GPU_MODEL="a100" ;;
+    esac
+    echo "  [auto-detect] GPU_MODEL=${GPU_MODEL} ← ${_GPU}"
+fi
+
+case "${GPU_MODEL}" in
+    h200) DTYPE="bf16"; BATCH=4; GRAD_ACCUM=4 ;;
+    a100) DTYPE="bf16"; BATCH=2; GRAD_ACCUM=8 ;;
+    v100) DTYPE="fp16"; BATCH=1; GRAD_ACCUM=16 ;;
+    *)    DTYPE="bf16"; BATCH=4; GRAD_ACCUM=4 ;;
+esac
+
+_BF16=$([ "${DTYPE}" = 'bf16' ] && echo 'True' || echo 'False')
+_FP16=$([ "${DTYPE}" = 'fp16' ] && echo 'True' || echo 'False')
+_GC='True'
+
+echo "=============================================================="
+echo "Ablation: No Sentence Reward — Qwen3-4B Instruct (SFT warm-start)"
+echo "Job ID:    ${PBS_JOBID}"
+echo "Node:      $(hostname)"
+echo "GPU:       $(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)"
+echo "GPU Model: ${GPU_MODEL}"
+echo "Dtype:     ${DTYPE}"
+echo "Batch:     ${BATCH} × ${GRAD_ACCUM} = $((BATCH * GRAD_ACCUM)) eff"
+echo "LR:        ${LR}"
+echo "Num gen:   ${NUM_GEN}"
+echo "Beta:      ${BETA}"
+echo "Steps:     ${TOTAL_STEPS}"
+echo "Init:      ${INIT}"
+echo "SFT:       ${SFT_CHECKPOINT}"
+echo "Output:    ${OUTPUT_DIR}"
+echo "Start:     $(date)"
+echo "=============================================================="
+
+source "${VENV_PATH}/bin/activate"
+export PYTHONPATH="${SRC_PATH}:${PYTHONPATH:-}"
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+export TOKENIZERS_PARALLELISM=false
+export HF_DATASETS_CACHE="/scratch/jp09/dd9648/.cache/huggingface/datasets"
+
+# flash-attn rebuild
+_FLASH_SRC="${PROJECT_ROOT}/.flash_attn_src/flash_attn-2.8.3.post1.tar.gz"
+if ! python -c "import flash_attn" 2>/dev/null; then
+    echo "flash_attn import failed — rebuilding from local source..."
+    if [ -f "${_FLASH_SRC}" ]; then
+        module load cuda/12.9.0 2>/dev/null || true
+        _FAKE_CUDA="/tmp/fakecuda13_$$"
+        mkdir -p "${_FAKE_CUDA}/bin"
+        cat > "${_FAKE_CUDA}/bin/nvcc" << 'NVCC_WRAPPER'
+#!/bin/bash
+if [[ "$*" == "--version" ]]; then
+    echo "nvcc: NVIDIA (R) Cuda compiler driver"
+    echo "Cuda compilation tools, release 13.0, V13.0.0"
+else
+    exec /apps/cuda/12.9.0/bin/nvcc "$@"
+fi
+NVCC_WRAPPER
+        chmod +x "${_FAKE_CUDA}/bin/nvcc"
+        ln -sf /apps/cuda/12.9.0/include "${_FAKE_CUDA}/include"
+        ln -sf /apps/cuda/12.9.0/lib64 "${_FAKE_CUDA}/lib64"
+        CUDA_HOME="${_FAKE_CUDA}" FLASH_ATTN_CUDA_ARCHS="80;90" MAX_JOBS=4 \
+            pip install "${_FLASH_SRC}" --no-build-isolation --force-reinstall --quiet || true
+        rm -rf "${_FAKE_CUDA}"
+    fi
+    if python -c "import flash_attn" 2>/dev/null; then
+        echo "flash_attn rebuild OK."
+    else
+        echo "WARNING: flash_attn rebuild failed — training will use sdpa (slower but correct)."
+    fi
+fi
+
+# Config override: sentence reward = 0.0
+OVERRIDE_CFG="${LOGS_DIR}/ablate_no_sent_instruct_sft_${PBS_JOBID}.json"
+python -c "
+import json
+print(json.dumps({
+    'per_device_train_batch_size': ${BATCH},
+    'gradient_accumulation_steps': ${GRAD_ACCUM},
+    'bf16': ${_BF16},
+    'fp16': ${_FP16},
+    'gradient_checkpointing': ${_GC},
+    'reward_weight_accuracy': 0.5,
+    'reward_weight_length': 0.3,
+    'reward_weight_sentence': 0.0,
+    'disable_thinking': True,
+    'beta': ${BETA},
+    'temperature': ${TEMPERATURE},
+    'length_advantage_alpha': 0.0,
+}))" > "${OVERRIDE_CFG}"
+
+# Warm-start from SFT checkpoint
+RESUME_ARG="--resume ${SFT_CHECKPOINT}"
+
+echo ""
+echo ">>> Starting GRPO training (no sentence reward, SFT warm-start)..."
+
+python src/SFT_GRPO/train_grpo.py \
+    --model_name "${LOCAL_MODEL}" \
+    --output_dir "${OUTPUT_DIR}" \
+    --lr "${LR}" \
+    --num_generations "${NUM_GEN}" \
+    --beta "${BETA}" \
+    --total_steps "${TOTAL_STEPS}" \
+    --train_data "data/grpo_train.jsonl" \
+    --val_data "data/grpo_val.jsonl" \
+    --config "${OVERRIDE_CFG}" \
+    ${RESUME_ARG}
+
+echo ""
+echo "=============================================================="
+echo "Ablation complete. Output: ${OUTPUT_DIR}/final"
+echo "End: $(date)"
+echo "=============================================================="
