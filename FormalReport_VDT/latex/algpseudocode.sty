@@ -1,0 +1,122 @@
+%% algpseudocode.sty — minimal standalone stub for algorithmicx/algpseudocode
+%% Implements only the commands used in this document.
+%% Does NOT use algorithmic.sty (incompatible command syntax).
+\NeedsTeXFormat{LaTeX2e}
+\ProvidesPackage{algpseudocode}[2018/01/10 Standalone algpseudocode stub]
+
+\RequirePackage{ifthen}
+\RequirePackage{keyval}
+
+\newcounter{ALG@line}
+\newcounter{ALG@rem}
+\newcounter{ALG@depth}
+\newlength{\ALG@tlm}
+\setlength{\ALG@tlm}{0pt}
+
+\newcommand{\ALG@it}{%
+  \stepcounter{ALG@rem}%
+  \ifthenelse{\equal{\arabic{ALG@rem}}{##1}}{\setcounter{ALG@rem}{0}}{}%
+  \stepcounter{ALG@line}%
+  \item[\arabic{ALG@line}:]%
+}
+
+\newenvironment{algorithmic}[1][0]{%
+  \setcounter{ALG@line}{0}%
+  \setcounter{ALG@rem}{#1}%
+  \begin{list}{}{%
+    \itemsep\z@
+    \itemindent\z@
+    \listparindent\z@
+    \rightmargin\z@
+    \topsep\z@
+    \partopsep\z@
+    \parskip\z@
+    \parsep\z@
+    \leftmargin 2em
+  }%
+  \newcommand{\State}{%
+    \stepcounter{ALG@line}%
+    \item[\arabic{ALG@line}:]%
+  }%
+  \newcommand{\Statex}{%
+    \item[]%
+  }%
+  \newcommand{\Comment}[1]{%
+    \hfill\textit{$\triangleright$ ##1}%
+  }%
+  \newcommand{\If}[1]{%
+    \stepcounter{ALG@line}%
+    \item[\arabic{ALG@line}:]\textbf{if} ##1 \textbf{then}%
+    \begin{list}{}{\leftmargin 2em}%
+  }%
+  \newcommand{\Else}{%
+    \end{list}%
+    \stepcounter{ALG@line}%
+    \item[\arabic{ALG@line}:]\textbf{else}%
+    \begin{list}{}{\leftmargin 2em}%
+  }%
+  \newcommand{\ElsIf}[1]{%
+    \end{list}%
+    \stepcounter{ALG@line}%
+    \item[\arabic{ALG@line}:]\textbf{else if} ##1 \textbf{then}%
+    \begin{list}{}{\leftmargin 2em}%
+  }%
+  \newcommand{\EndIf}{%
+    \end{list}%
+    \stepcounter{ALG@line}%
+    \item[\arabic{ALG@line}:]\textbf{end if}%
+  }%
+  \newcommand{\For}[1]{%
+    \stepcounter{ALG@line}%
+    \item[\arabic{ALG@line}:]\textbf{for} ##1 \textbf{do}%
+    \begin{list}{}{\leftmargin 2em}%
+  }%
+  \newcommand{\ForAll}[1]{%
+    \stepcounter{ALG@line}%
+    \item[\arabic{ALG@line}:]\textbf{for all} ##1 \textbf{do}%
+    \begin{list}{}{\leftmargin 2em}%
+  }%
+  \newcommand{\EndFor}{%
+    \end{list}%
+    \stepcounter{ALG@line}%
+    \item[\arabic{ALG@line}:]\textbf{end for}%
+  }%
+  \newcommand{\While}[1]{%
+    \stepcounter{ALG@line}%
+    \item[\arabic{ALG@line}:]\textbf{while} ##1 \textbf{do}%
+    \begin{list}{}{\leftmargin 2em}%
+  }%
+  \newcommand{\EndWhile}{%
+    \end{list}%
+    \stepcounter{ALG@line}%
+    \item[\arabic{ALG@line}:]\textbf{end while}%
+  }%
+  \newcommand{\Repeat}{%
+    \stepcounter{ALG@line}%
+    \item[\arabic{ALG@line}:]\textbf{repeat}%
+    \begin{list}{}{\leftmargin 2em}%
+  }%
+  \newcommand{\Until}[1]{%
+    \end{list}%
+    \stepcounter{ALG@line}%
+    \item[\arabic{ALG@line}:]\textbf{until} ##1%
+  }%
+  \newcommand{\Loop}{%
+    \stepcounter{ALG@line}%
+    \item[\arabic{ALG@line}:]\textbf{loop}%
+    \begin{list}{}{\leftmargin 2em}%
+  }%
+  \newcommand{\EndLoop}{%
+    \end{list}%
+    \stepcounter{ALG@line}%
+    \item[\arabic{ALG@line}:]\textbf{end loop}%
+  }%
+  \newcommand{\Require}{\stepcounter{ALG@line}\item[\arabic{ALG@line}:]\textbf{Require:}}
+  \newcommand{\Ensure}{\stepcounter{ALG@line}\item[\arabic{ALG@line}:]\textbf{Ensure:}}
+  \newcommand{\Return}{\stepcounter{ALG@line}\item[\arabic{ALG@line}:]\textbf{return} }
+  \newcommand{\Print}{\stepcounter{ALG@line}\item[\arabic{ALG@line}:]\textbf{print} }
+}{%
+  \end{list}%
+}
+
+\endinput

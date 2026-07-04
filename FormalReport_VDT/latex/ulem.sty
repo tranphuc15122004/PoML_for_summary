@@ -1,0 +1,17 @@
+%% ulem.sty — minimal stub for ulem package
+%% Provides the \uuline command used in this document.
+\NeedsTeXFormat{LaTeX2e}
+\ProvidesPackage{ulem}[2018/01/10 Minimal ulem stub for RHEL TeX Live]
+
+\DeclareOption{normalem}{\let\emph\em}
+\ProcessOptions\relax
+
+\newcommand{\uline}[1]{\underline{#1}}
+\newcommand{\uuline}[1]{\underline{\underline{#1}}}
+\newcommand{\uwave}[1]{#1}
+\newcommand{\sout}[1]{#1}
+\newcommand{\xout}[1]{#1}
+\newcommand{\dashuline}[1]{#1}
+\newcommand{\dotuline}[1]{#1}
+
+\endinput

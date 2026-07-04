@@ -1,107 +1,107 @@
-# Đề cương chi tiết đề tài nghiên cứu & phát triển
+# Phát biểu bài toán: hậu huấn luyện cho tóm tắt tiếng Việt có kiểm soát
 
-<div align="center">
+**Đơn vị:** Viettel AI  
+**Backbone chính của báo cáo:** Qwen3-4B-Base và Qwen3-4B-Instruct  
+**Phiên bản report hiện tại:** dùng artefact đã lưu, không rerun toàn bộ huấn luyện/evaluation
 
-**Tên đề tài:** Hậu huấn luyện (Post-training) cho Mô hình Tóm tắt Văn bản Tiếng Việt theo Yêu cầu Đa dạng  
-**Đơn vị chủ trì:** Viettel AI  
-**Lĩnh vực ứng dụng:** Trợ lý ảo (Virtual Assistant), Social 360 và các giải pháp xử lý ngôn ngữ tự nhiên cho doanh nghiệp
+## 1. Bối cảnh
 
-</div>
+Các ứng dụng tóm tắt trong trợ lý ảo, giám sát thông tin và hệ thống doanh nghiệp không chỉ cần bản tóm tắt đúng nội dung mà còn phải tuân thủ giới hạn đầu ra. Với tiếng Việt, mô hình nhỏ và mô hình open-weight thường:
 
----
+- sinh quá dài hoặc quá ngắn so với yêu cầu;
+- tuân thủ số câu không ổn định;
+- dễ đánh đổi chất lượng nội dung để ăn điểm constraint bề mặt;
+- ở giai đoạn RL có thể rơi vào reward hacking hoặc output thoái hóa.
 
-## 1. Tổng quan và bối cảnh
+Project này nghiên cứu một pipeline hậu huấn luyện trên một GPU, kết hợp LoRA-SFT và custom GRPO, nhằm cải thiện đồng thời chất lượng tóm tắt và khả năng điều khiển đầu ra.
 
-Viettel AI đang đẩy mạnh chiến lược xây dựng và làm chủ các mô hình ngôn ngữ lớn (LLM) phục vụ cho tác vụ tổng hợp và tóm tắt văn bản. Các mô hình này cần đảm bảo các tiêu chuẩn khắt khe về tính bảo mật, độ chính xác và khả năng tùy biến cao nhằm đáp ứng nhu cầu thực tế của khách hàng trong nhiều lĩnh vực, đặc biệt là các sản phẩm cốt lõi như Trợ lý ảo và Social 360.
+## 2. Định nghĩa tác vụ
 
----
+Với source document hoặc document cluster `x`, instruction `c` và reference summary `y*`, mô hình sinh `ŷ` sao cho:
 
-## 2. Đặt vấn đề và mục tiêu
+1. `ŷ` giữ được thông tin chính của `x`;
+2. `ŷ` bám yêu cầu độ dài;
+3. `ŷ` bám yêu cầu số câu;
+4. `ŷ` không bị lặp vô nghĩa, blob hoặc mất nội dung.
 
-### 2.1. Đặt vấn đề
+Các constraint trong pipeline hiện tại dùng ba mẫu:
 
-Trong các ứng dụng thực tế, yêu cầu của người dùng về chất lượng và hình thức tóm tắt văn bản rất đa dạng và phụ thuộc nhiều vào ngữ cảnh sử dụng. Các mô hình LLM cơ bản (base models) hoặc chỉ được huấn luyện sơ bộ thường gặp khó khăn trong việc tuân thủ chính xác các ràng buộc phức tạp về độ dài, phong cách ngôn ngữ và định dạng đầu ra, đặc biệt là trên dữ liệu tiếng Việt.
+- `khoảng X từ/câu`;
+- `trong khoảng lo-hi từ/câu`;
+- `không quá X từ/câu`.
 
-### 2.2. Mục tiêu đề tài
+Trong code hiện tại, “từ” là đơn vị whitespace-delimited token. Báo cáo cần gọi rõ đây là đơn vị kỹ thuật của benchmark hiện có, không phải word segmentation ngôn ngữ học chuẩn.
 
-Xây dựng và tối ưu hóa quy trình hậu huấn luyện (post-training) để căn chỉnh hành vi (Alignment) của mô hình dựa trên phản hồi, giúp mô hình tuân thủ tuyệt đối các yêu cầu cụ thể của người dùng, bao gồm:
+## 3. Câu hỏi nghiên cứu chính cho báo cáo này
 
-- **Kiểm soát độ dài (Length Control):** Khả năng tóm tắt văn bản theo số lượng câu hoặc số lượng từ được chỉ định chính xác.
-- **Kiểm soát phong cách/ngữ cảnh (Persona Control):** Khả năng điều chỉnh giọng văn và văn phong theo các yêu cầu cụ thể: Báo chí, Sinh hoạt, Chính luận, Khoa học, Hành chính.
+- **RQ1:** So với pretrained model, SFT-only, GRPO-fresh v5 và SFT+GRPO v5 cải thiện chất lượng và constraint adherence đến mức nào?
+- **RQ2:** Backbone `Base` và `Instruct` khác nhau ra sao trước và sau hậu huấn luyện?
+- **RQ3:** Gói thay đổi từ `v3 -> v5` có giảm được reward hacking, zero-content output và degenerate output hay không?
+- **RQ4:** Configuration bundle `v4` và `v5` tạo ra trade-off gì giữa quality và length control?
 
----
+Phần sau chỉ để appendix, không phải RQ chính:
 
-## 3. Phạm vi nghiên cứu
+- sentence-loss ablation;
+- exploratory multi-document comparison;
+- external baseline comparison theo nghĩa contextual.
 
-Để giải quyết bài toán một cách hệ thống, đề tài được chia thành các hướng nghiên cứu trọng tâm:
+## 4. Phạm vi báo cáo
 
-- **Hướng nghiên cứu:** Tập trung vào *Length Control* và *Persona Control*, giải quyết bài toán hiểu và tuân thủ các ràng buộc về ngữ nghĩa và độ dài.
-- **Có thể đề xuất thêm hướng nghiên cứu cho đề tài này**
+### Trong phạm vi claim chính
 
----
+- Single-document summarization trên VietNews và WikiLingua.
+- Ma trận `Base/Instruct × {pretrained, SFT, GRPO-fresh v5, SFT+GRPO v5}`.
+- Failure analysis `v3 -> v5` cho reward-hacking mitigation package.
+- `v4 -> v5` configuration-bundle ablation.
 
-## 4. Thách thức và giải pháp đề xuất
+### Chỉ mang tính exploratory/contextual
 
-Quá trình nghiên cứu và phát triển đối mặt với 4 thách thức chính, kèm theo các giải pháp kỹ thuật đề xuất:
+- ViMs và VLSP.
+- Bảng baseline ngoài project.
+- Historical combined aggregate `N=3100`.
 
-| # | Thách thức | Mô tả |
-|:---:|:---|---|
-| 1 | **Dữ liệu** | Thiếu hụt dữ liệu chất lượng cao cho tiếng Việt, đặc biệt là dữ liệu có kèm lập luận (reasoning data) phục vụ cho tác vụ tóm tắt có ràng buộc |
-| 2 | **Mô hình** | Các mô hình LLM kích thước nhỏ (Small LLMs) thường có khả năng tuân thủ chỉ dẫn (instruction-following) kém hơn so với các mô hình lớn |
-| 3 | **Thước đo (Metrics)** | Các thang đo tự động truyền thống như ROUGE hay BARTScore có hạn chế trong việc đánh giá độ tuân thủ định dạng (JSON), độ dài chính xác và phong cách văn bản |
-| 4 | **Tài nguyên** | Thời gian huấn luyện Reinforcement Learning (RL) kéo dài và rủi ro quên thông tin nền tảng (Catastrophic Forgetting) |
+### Ngoài phạm vi kết quả chính
 
----
+- Persona/style control.
+- DPO hoặc preference-pair training.
+- Demo web/API.
+- Kết luận nhân quả riêng cho sentence reward.
 
-## 5. Quy trình thực hiện chi tiết
+## 5. Thách thức kỹ thuật đã xử lý
 
-Đề tài được triển khai theo 5 giai đoạn tuần tự và logic:
+| Thách thức | Cách xử lý hiện tại |
+|---|---|
+| Dữ liệu tiếng Việt không đồng nhất | Loader riêng cho 4 nguồn, chuẩn hóa về source/reference |
+| Reference VietNews quá ngắn | Lọc title dưới 10 whitespace token cho SFT |
+| Small LLM tuân thủ instruction yếu | Dùng SFT trước GRPO |
+| Reward hacking | Dùng multiplicative content gate và degenerate-output detector |
+| Repetition penalty phá output | Tắt repetition penalty / no-repeat n-gram trong run chính |
+| VRAM/compute hạn chế | LoRA, gradient checkpointing, auto batch calibration, bf16 |
 
-### Giai đoạn 1: Chuẩn bị dữ liệu & Thiết lập Baseline
-- Thu thập, làm sạch và phân loại dữ liệu văn bản tiếng Việt đa lĩnh vực
-- Tạo cặp dữ liệu Instruction-Response với các ràng buộc cụ thể (độ dài)
-- Thiết lập mô hình Baseline và đo lường các chỉ số hiệu năng ban đầu để làm mốc so sánh
+## 6. Tiêu chí thành công của báo cáo hiện tại
 
-### Giai đoạn 2: Supervised Fine-Tuning (SFT)
-- Thực hiện fine-tuning mô hình (sử dụng LoRA/QLoRA)
-- Mục tiêu: Giúp mô hình nắm bắt hành vi cơ bản, hiểu được instruction và tuân thủ định dạng đầu ra (độ dài) ở mức độ chấp nhận được
+Với báo cáo project hiện tại, “thành công” không đồng nghĩa với việc phải rerun sạch toàn bộ. Thay vào đó, báo cáo cần:
 
-### Giai đoạn 3: Căn chỉnh hành vi (Alignment Training)
-- Xây dựng bộ dữ liệu ưu tiên (Preference Data): Cặp (Chosen, Rejected) dựa trên mức độ tuân thủ yêu cầu của người dùng
-- Huấn luyện mô hình bằng các thuật toán RLHF, DPO hoặc GRPO
-- Mục tiêu: Tối ưu hóa phản hồi của mô hình dựa trên feedback, nâng cao độ chính xác, độ ổn định và khả năng tuân thủ các ràng buộc phức tạp
+- mô tả đúng provenance của mọi số liệu;
+- không gọi sai decoding hiện có là greedy;
+- giới hạn generalization claim chính vào VietNews/WikiLingua;
+- gắn cảnh báo validity cho ViMs/VLSP và baseline ngoài;
+- diễn giải `v3 -> v5` là mitigation package ablation, không phải detector-only ablation;
+- giữ sentence-loss ablation ở appendix với kết luận `inconclusive`.
 
-### Giai đoạn 4: Đánh giá chất lượng mô hình sau Post-training
-- **Đánh giá tự động:** Sử dụng ROUGE, Length Control Error (L2 distance của độ dài văn bản tóm tắt và preference), BARTScore, và LLM-as-a-Judge (đánh giá độ tuân thủ format, độ dài, phong cách)
-- **Đánh giá thủ công:** Lấy mẫu kết quả để chuyên gia ngôn ngữ và nghiệp vụ chấm điểm theo rubrics
-- **Kiểm tra:** Hiện tượng Catastrophic Forgetting trên các tác vụ tổng quát
+Các nâng cấp như split sạch cho ViMs/VLSP, greedy/seeded rerun, ROUGE chuẩn hóa đầy đủ và human evaluation hoàn chỉnh vẫn rất có giá trị, nhưng được xem là hướng tăng độ mạnh của paper về sau chứ không phải điều kiện bắt buộc để hoàn tất báo cáo project hiện tại.
 
-### Giai đoạn 5: Xây dựng chương trình Demo
-- Phát triển giao diện người dùng (UI) cho phép nhập văn bản gốc và cấu hình các tham số yêu cầu (độ dài, phong cách, định dạng đầu ra)
-- Tích hợp API của mô hình đã huấn luyện để hiển thị kết quả tóm tắt theo thời gian thực
+## 7. Trạng thái đạt mục tiêu
 
----
-
-## 6. Yêu cầu đầu ra (Deliverables)
-
-### 6.1 Mã nguồn & Chương trình Demo
-- Source code đầy đủ, được ghi chú rõ ràng cho quy trình tiền xử lý dữ liệu, huấn luyện (SFT, DPO/GRPO) và inference
-- Ứng dụng Demo (Web App) minh họa trực quan khả năng tóm tắt theo yêu cầu đa dạng của mô hình
-
-### 6.2 Báo cáo kỹ thuật
-- Tài liệu mô tả chi tiết phương pháp thực hiện, kiến trúc dữ liệu và quy trình huấn luyện
-- Bảng kết quả thử nghiệm, phân tích và so sánh hiệu năng giữa mô hình Baseline và mô hình sau Post-training trên các metrics đã đề ra
-
-### 6.3 Tài liệu thuyết trình
-- Bộ slide tổng hợp toàn bộ nội dung dự án (Bối cảnh, Mục tiêu, Thách thức, Giải pháp, Kết quả và Demo) phục vụ cho việc báo cáo và nghiệm thu đề tài
-
----
-
-## 7. Tài liệu tham khảo
-
-1. Kumar, K., Ashraf, T., Thawakar, O., Anwer, R. M., Cholakkal, H., Shah, M., ... & Khan, S. (2025). *LLM Post-training: A Deep Dive into Reasoning Large Language Models*. arXiv preprint arXiv:2502.21321.
-2. Tie, G., Zhao, Z., Song, D., Wei, F., Zhou, R., Dai, Y., ... & Gao, J. (2025). *A Survey on Post-training of Large Language Models*. arXiv preprint arXiv:2503.06072.
-
----
-
-> **Lưu ý:** Tài liệu này đóng vai trò là bản mô tả tổng thể và chi tiết của đề tài. Các thông số kỹ thuật cụ thể (tên mô hình base, kích thước tham số, quy mô tập dữ liệu, hyperparameters) sẽ được bổ sung và cập nhật trong Báo cáo kỹ thuật chi tiết ở giai đoạn thực thi.
+| Mục tiêu | Trạng thái |
+|---|---|
+| Pipeline dữ liệu -> SFT -> GRPO -> eval | Hoàn thành |
+| Bằng chứng quality improvement trên single-document | Có |
+| Bằng chứng length control trên single-document | Có |
+| So sánh Base và Instruct | Có |
+| Reward-hacking failure analysis `v3 -> v5` | Có thể báo cáo từ artefact đã lưu |
+| V4–V5 bundle ablation | Có |
+| Sentence reward ablation | Có nhưng chưa kết luận |
+| Generalization multi-document | Chưa xác nhận do leakage |
+| Human evaluation pilot | Chưa chấm, mới khóa protocol |
+| Persona/style control | Không nằm trong kết quả chính |

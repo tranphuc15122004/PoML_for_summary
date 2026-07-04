@@ -1,0 +1,17 @@
+%% multirow.sty — minimal stub for multirow package
+%% Provides the \multirow command used in this document.
+\NeedsTeXFormat{LaTeX2e}
+\ProvidesPackage{multirow}[2018/01/10 Minimal multirow stub for RHEL TeX Live]
+
+\newcommand{\multirow}[2][]{%
+  \PackageWarning{multirow}{Using minimal multirow stub}%
+  \def\multirow@cols{#1}%
+  \def\multirow@rows{#2}%
+  \multirow@typeset
+}
+
+\def\multirow@typeset#1{%
+  \texorpdfstring{#1}{#1}%
+}
+
+\endinput
