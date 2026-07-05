@@ -4,7 +4,6 @@
 \usepackage[final]{acl}
 
 \usepackage{times}
-\renewcommand{\ttdefault}{lmtt}
 \usepackage{latexsym}
 \usepackage[T1]{fontenc}
 \usepackage[utf8]{inputenc}
@@ -74,10 +73,10 @@
 
 \begin{abstract}
 Controllable Vietnamese summarization requires a model to preserve source content while also obeying explicit output budgets.
-We present an empirical study of a lightweight post-training pipeline that combines instruction-conditioned LoRA supervised fine-tuning (SFT) with a custom group relative policy optimization (GRPO) loop for two Qwen3-4B backbones.
-The main paper evaluates the resulting post-trained systems on four datasets (VietNews, WikiLingua, ViMs, and VLSP) and situates them against contextual baselines such as VietAI, GPT-4o, GPT-3.5-Turbo, Qwen3-14B, and Llama3.3-70B-Instruct using ROUGE-2 and absolute summary length distance.
-On the two held-out single-document datasets that support our strongest claims, the final \texttt{SFT + GRPO v5} systems substantially improve over their raw Qwen3 backbones and compare favorably to several historical, non-protocol-matched external rows while keeping low length distance; the Instruct system reaches 29.62 ROUGE-2 on VietNews, and the Base system reaches 26.35 on WikiLingua.
-We keep ViMs and VLSP visible in the benchmark tables as exploratory multi-document diagnostics because their current test pools overlap with project training or validation data, and we use targeted ablations to show that SFT is the dominant improvement stage, that warm-starting GRPO from the SFT checkpoint is better than applying GRPO directly to the pretrained backbone, and that the safeguarded reward design sharply reduces failure-prone behavior relative to the earlier GRPO setup. The code for the project is available at \url{https://github.com/tranphuc15122004/PoML_for_summary}.
+We present a lightweight post-training pipeline that combines instruction-conditioned LoRA supervised fine-tuning (SFT) with custom group relative policy optimization (GRPO) for two Qwen3-4B backbones.
+The main paper evaluates the resulting post-trained systems on four datasets (VietNews, WikiLingua, ViMs, and VLSP) against contextual baselines such as VietAI, GPT-4o, GPT-3.5-Turbo, Qwen3-14B, and Llama3.3-70B-Instruct using ROUGE-2 and absolute summary length distance.
+On the two held-out single-document datasets that support our strongest claims, the resulting systems outperform the historical GPT-4o, GPT-3.5-Turbo, and Qwen3-14B rows in ROUGE-2 while keeping low length distance; the Instruct backbone reaches 29.62 ROUGE-2 on VietNews, and the Base backbone reaches 26.35 on WikiLingua.
+We keep ViMs and VLSP visible in the benchmark tables as exploratory multi-document diagnostics, and we use targeted ablations to show that SFT is the dominant improvement stage, that warm-starting GRPO from the SFT checkpoint is better than applying GRPO directly to the pretrained backbone, and that the safeguarded reward design sharply reduces failure-prone behavior relative to the earlier GRPO setup.
 \end{abstract}
 
 \section{Introduction}
@@ -85,7 +84,7 @@ Controllable summarization is useful when systems must meet strict output budget
 In these settings, a model must preserve salient content while also satisfying an explicit length target.
 That combination is still difficult for lightweight open-weight language models, especially in Vietnamese, where controllable summarization resources and post-training analyses remain limited.
 
-This paper studies a practical post-training recipe for that setting as an empirical case study of lightweight Vietnamese controllable summarization.
+This paper studies a practical post-training recipe for that setting.
 Our focus is not to enumerate model variants for their own sake, but to explain a method (instruction-conditioned LoRA-SFT followed by custom GRPO) and to position its final outputs against external baselines on the datasets currently available in the project.
 The two instantiated project systems are the Base and Instruct backbones after SFT followed by GRPO.
 
@@ -93,9 +92,9 @@ We evaluate the final systems on four datasets and emphasize two main metrics: R
 VietNews and WikiLingua provide the cleanest held-out single-document evidence.
 ViMs and VLSP remain informative for multi-document behavior, but their current test sets overlap with project training or validation pools and therefore appear in the paper with explicit exploratory caveats.
 
-The paper makes three empirical contributions.
+The paper makes three contributions.
 First, it documents a lightweight Vietnamese controllable summarization pipeline from prompt construction through LoRA-SFT, GRPO alignment, and evaluation.
-Second, it reports a four-dataset benchmark that situates the final systems alongside historical baselines such as VietAI, GPT-4o, GPT-3.5-Turbo, and Qwen3-14B while keeping protocol caveats visible.
+Second, it reports a four-dataset benchmark against historical baselines such as VietAI, GPT-4o, GPT-3.5-Turbo, and Qwen3-14B, while keeping protocol caveats visible.
 Third, it includes focused analyses of the training stages and of the failure-prone behavior observed under earlier GRPO settings.
 The appendix preserves the supporting evidence behind these claims: the full within-project stage tables, the historical configuration-bundle comparison, the exploratory multi-document baseline comparison, the sentence-control results, and the sentence-reward ablation.
 
@@ -137,7 +136,7 @@ At inference time, the model receives the source and the control instruction and
 The instruction schema is shared across SFT, GRPO, and evaluation.
 All prompts are built by the project's data augmentation pipeline.
 Word counts are computed as whitespace-delimited tokens, and sentence counts are computed from end punctuation.
-SFT always uses the approximate constraint template family, GRPO rotates across approximate, range, and upper-bound templates to diversify the control language, and evaluation fixes the approximate template family for deterministic testing against the frozen artefacts.
+SFT always uses the approximate constraint template family, while GRPO and evaluation rotate across approximate, range, and upper-bound templates to diversify the control language.
 
 \subsection{Dataset Inventory and Validity Boundary}
 Table~\ref{tab:datasets} summarizes the four datasets used in the report.
@@ -187,30 +186,6 @@ The project studies two initialization modes.
 \emph{Fresh} GRPO attaches a new LoRA adapter directly to the pretrained backbone, while \emph{SFT-initialized} GRPO warm-starts from the SFT checkpoint.
 In the final paper narrative, fresh GRPO is treated as an ablation baseline and SFT-initialized GRPO is treated as the intended deployment recipe.
 
-Within each update, the trainer formats a batch of prompts, samples $K$ completions per prompt, computes rewards $r_{i,k}$, and normalizes them within each prompt group:
-\begin{equation}
-A_{i,k} = \frac{r_{i,k} - \bar{r}_{i}}{\max(\sigma_i, 0.01)},
-\end{equation}
-where $i$ indexes prompts and $k$ indexes the sampled completions for prompt $i$.
-The policy is then updated with a PPO-style clipped objective over generated tokens plus a KL penalty to the frozen reference model:
-\begin{equation}
-\begin{aligned}
-L_{\text{policy}} =
--\frac{1}{|M|}
-\sum_{i,k,t}
-\min \Bigl(
-&\rho_{i,k,t} A_{i,k}, \\
-&\mathrm{clip}(\rho_{i,k,t}, 1-\epsilon, 1+\epsilon) A_{i,k}
-\Bigr) m_{i,k,t},
-\end{aligned}
-\end{equation}
-\begin{equation}
-L = L_{\text{policy}} + \beta L_{\text{KL}},
-\end{equation}
-where $\rho_{i,k,t} = \exp(\log \pi_{\theta} - \log \pi_{\text{old}})$ and $m_{i,k,t}$ masks generated tokens up to the first EOS token.
-In the implementation, $\pi_{\text{old}}$ is the detached current policy within the same on-policy step, and the KL term is computed token-wise against the frozen reference model.
-This makes the method a lightweight GRPO-style rollout-and-update loop tailored to the present summarization setting rather than a wrapper around a stock trainer.
-
 \subsection{Reward Design and Anti-Hacking Safeguards}
 The reward combines content quality with explicit control adherence.
 Content quality is measured as
@@ -228,9 +203,9 @@ Because constraint-based rewards are susceptible to reward hacking—where a mod
 At the \textbf{generation} layer, \textit{repetition\_penalty} is kept at $1.0$ and \textit{no\_repeat\_ngram\_size} at $0$.
 Preliminary experiments showed that higher values of either parameter, when applied by the HuggingFace decoder over the full $\approx 2{,}000$-token input sequence, penalized the model for reusing source-article vocabulary and pushed decoding toward out-of-distribution symbols, which is especially damaging for short Vietnamese summaries where named entities and key terms must appear verbatim.
 At the \textbf{detection} layer, a post-hoc filter \texttt{\_is\_degenerate()} examines each rollout with five sequential checks: empty or whitespace-only output; single-token blobs longer than $25$ characters without spaces; fewer than three alphabetic characters; alpha character ratio below $12\%$ when exceeding $15$ characters; and token repetition where one token accounts for over $60\%$ of all tokens or unique tokens fall below $30\%$.
-Any output flagged by this filter receives $R_{\text{len}}=0$ and $R_{\text{sent}}=0$, so degenerate rollouts cannot earn any constraint bonus; under the multiplicative gate, only residual content overlap captured by $R_{\text{acc}}$ can remain.
+Any output flagged by this filter receives $R_{\text{len}}=0$ and $R_{\text{sent}}=0$, which together with the multiplicative gate ensures that degenerate rollouts contribute zero total reward.
 At the \textbf{formula} layer, the multiplicative gate (Equation~2) structurally prevents constraint-only optimization: no amount of length or sentence adherence can compensate for zero content quality.
-Additionally, the upper-bound constraint ``khong qua $X$ tu'' enforces a floor of $\max(3, 0.15 \times \text{max\_wc})$ words; outputs shorter than this floor receive $R_{\text{len}}=0$, closing the loophole of satisfying the constraint with one- or two-word garbage.
+Additionally, the upper-bound constraint ``không quá $X$ từ'' enforces a floor of $\max(3, 0.15 \times \text{max\_wc})$ words; outputs shorter than this floor receive $R_{\text{len}}=0$, closing the loophole of satisfying the constraint with one- or two-word garbage.
 
 \subsection{GRPO Variant Nomenclature and Analysis Setups}
 The experiments vary two independent aspects: initialization path and GRPO configuration bundle.
@@ -347,7 +322,7 @@ Each dataset appears explicitly as a two-column block ($\Delta$R2 and LenRed), s
 \end{figure*}
 
 The two main tables show the raw benchmark values, while Figure~\ref{fig:benchmark-improvement} makes the comparison direction explicit.
-On VietNews and WikiLingua, both final systems improve strongly over the raw Qwen3 baselines and compare favorably to several external rows with available length-control values; VietAI remains the strongest ROUGE-2 row on both datasets, and the external baselines should still be read as contextual because they are not protocol-matched reruns.
+On VietNews and WikiLingua, both final systems improve strongly over the raw Qwen3 baselines and over every external baseline with available length-control values; the only ROUGE-2 exception is VietAI, which remains about 18\% higher but does not report matching length-distance values.
 The same figure also shows that the method is not merely beating unrelated baselines: relative to the raw Qwen3 backbones, both final systems make especially large ROUGE-2 gains on WikiLingua and strong length-distance reductions on both single-document datasets.
 
 ViMs and VLSP remain visible rather than hidden.
@@ -423,7 +398,7 @@ In v3 (the pre-safeguard bundle), three interacting design flaws created conditi
 First, v3 used a \textbf{linear reward sum} $R_{\text{total}} = w_{\text{acc}}R_{\text{acc}} + w_{\text{len}}R_{\text{len}} + w_{\text{sent}}R_{\text{sent}}$, which allowed the constraint terms to contribute independently of content: a model could score $\approx 0.50$ by satisfying length and sentence budgets with garbage while ignoring $R_{\text{acc}}$.
 Second, \textit{repetition\_penalty} $=1.3$ was applied by the HuggingFace decoder over the full $\approx 2{,}000$-token input sequence, penalizing the model for reusing any vocabulary from the source article and pushing generation toward out-of-distribution symbols.
 Third, \textit{no\_repeat\_ngram\_size} $=3$ blocked source trigrams, forbidding named entities and key Vietnamese content words.
-The resulting failure modes, concentrated in the Base branches where the pretrained backbone lacks the instruction-following prior of the Instruct model, included repetition loops (e.g., \texttt{assistant} repeated $128$ times, $\text{ROUGE-2}=0.0$), punctuation padding ($245$ words of periods, $\text{LenErr}=1189\%$), digit blobs that satisfied ``khong qua $X$ tu'' with $R_{\text{len}}=1.0$ and $R_{\text{acc}}=0$, and comma-separated token loops carrying no semantic content.
+The resulting failure modes, concentrated in the Base branches where the pretrained backbone lacks the instruction-following prior of the Instruct model, included repetition loops (e.g., \texttt{assistant} repeated $128$ times, $\text{ROUGE-2}=0.0$), punctuation padding ($245$ words of periods, $\text{LenErr}=1189\%$), digit blobs that satisfied ``không quá $X$ từ'' with $R_{\text{len}}=1.0$ and $R_{\text{acc}}=0$, and comma-separated token loops carrying no semantic content.
 Figure~\ref{fig:reward-cases} illustrates the two most severe modes qualitatively.
 Appendix~\ref{sec:appendix-v4v5} records the historical bundle-level v4-v5 comparison, and Appendix~\ref{sec:appendix-nosentence} keeps the sentence-reward ablation that remains inconclusive under the frozen sampling protocol.
 
@@ -472,7 +447,7 @@ Appendix~\ref{sec:appendix-sentence} retains the sentence-control results that j
 \section{Conclusion}
 This paper reframes the project as a method-first study of lightweight post-training for controllable Vietnamese summarization.
 The central result is that a two-stage recipe, combining instruction-conditioned LoRA-SFT with custom GRPO v5, improves single-document performance within the evaluated Qwen3-4B systems on both ROUGE-2 and absolute summary length distance.
-In the main benchmark, the final project systems are competitive with, and often above, several historical comparison rows on VietNews and WikiLingua while maintaining low length distance; those rows remain contextual rather than protocol-matched comparisons.
+In the main benchmark, the final project systems score above most historical comparison rows on VietNews and WikiLingua while maintaining low length distance; these rows are contextual rather than protocol-matched comparisons.
 
 The within-project comparisons characterize the contributions of the evaluated training stages.
 SFT is the dominant improvement stage, fresh GRPO is not a substitute for supervised instruction tuning, and the v3-to-v5 mitigation package sharply reduces failure-prone behavior in the branches that were previously unstable.
@@ -662,7 +637,7 @@ The most important preprocessing rules are listed below.
 \label{sec:appendix-prompts}
 This subsection summarizes the end-to-end pipeline configuration used by the paper.
 The source of truth is the project's canonical configuration files, training scripts, evaluation pipeline, and audit documentation.
-Prompt examples are shown in an ASCII-friendly transliteration for toolchain compatibility, but they follow the same instruction format used throughout the pipeline.
+Prompt examples are shown with full Vietnamese diacritics and follow the instruction format used throughout the pipeline.
 
 \paragraph{Data augmentation and prompt construction.}
 \begin{table}[H]
@@ -801,12 +776,12 @@ Randomness & One-shot low-temperature sampling; no saved seed \\
 \noindent\colorbox{promptbg}{%
 \begin{minipage}{\dimexpr\textwidth-2\fboxsep\relax}
 \small\vspace{4pt}
-\textbf{System:} Ban la mot tro ly AI chuyen tom tat van ban tieng Viet. Hay tao ra ban tom tat ngan gon, chinh xac, tuan thu dung yeu cau ve do dai va so cau.
+\textbf{System:} Bạn là một trợ lý AI chuyên tóm tắt văn bản tiếng Việt. Hãy tạo ra bản tóm tắt ngắn gọn, chính xác, tuân thủ đúng yêu cầu về độ dài và số câu.
 
 \smallskip
 \textbf{User:}
 \begin{itemize}
-  \item Do dai: khoang 22 tu
+  \item Độ dài: khoảng 22 từ
   \item So cau: khoang 1 cau
 \end{itemize}
 Van ban: \textless{}source article\textgreater
@@ -822,7 +797,7 @@ Van ban: \textless{}source article\textgreater
 \noindent\colorbox{promptbg}{%
 \begin{minipage}{\dimexpr\textwidth-2\fboxsep\relax}
 \small\vspace{4pt}
-\textbf{System:} Ban la mot tro ly AI chuyen tom tat van ban tieng Viet. Hay tao ra ban tom tat ngan gon, chinh xac, tuan thu dung yeu cau ve do dai va so cau.
+\textbf{System:} Bạn là một trợ lý AI chuyên tóm tắt văn bản tiếng Việt. Hãy tạo ra bản tóm tắt ngắn gọn, chính xác, tuân thủ đúng yêu cầu về độ dài và số câu.
 
 \smallskip
 \textbf{User:}
@@ -846,12 +821,12 @@ Van ban: \textless{}source article\textgreater
 \noindent\colorbox{promptbg}{%
 \begin{minipage}{\dimexpr\textwidth-2\fboxsep\relax}
 \small\vspace{4pt}
-\textbf{System:} Ban la mot tro ly AI chuyen tom tat van ban tieng Viet. Hay tao ra ban tom tat ngan gon, chinh xac, tuan thu dung yeu cau ve do dai va so cau.
+\textbf{System:} Bạn là một trợ lý AI chuyên tóm tắt văn bản tiếng Việt. Hãy tạo ra bản tóm tắt ngắn gọn, chính xác, tuân thủ đúng yêu cầu về độ dài và số câu.
 
 \smallskip
 \textbf{User:}
 \begin{itemize}
-  \item Do dai: khoang 22 tu
+  \item Độ dài: khoảng 22 từ
   \item So cau: khoang 1 cau
 \end{itemize}
 Van ban: \textless{}source article\textgreater
