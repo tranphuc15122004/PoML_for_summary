@@ -33,111 +33,91 @@
 \@writefile{toc}{\contentsline {paragraph}{Controllable and length-aware summarization.}{2}{section*.2}}
 \@writefile{toc}{\contentsline {paragraph}{Post-training for summarization behavior.}{2}{section*.3}}
 \@writefile{toc}{\contentsline {paragraph}{Reward design and reward hacking.}{2}{section*.4}}
-\@writefile{toc}{\contentsline {section}{\numberline {3}Datasets}{2}{section.3}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.1}Task and Prompt Setting}{2}{subsection.3.1}}
-\@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces Datasets used in the report. VietNews and WikiLingua provide the strongest held-out evidence. ViMs and VLSP remain visible in the benchmark tables but are exploratory because their current test pools overlap with project training or validation data.\relax }}{3}{table.caption.5}}
+\@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces Datasets used in the report. VietNews and WikiLingua provide the strongest single-document evidence. ViMs and VLSP remain visible in the benchmark tables but have split overlap with project training or validation data.\relax }}{3}{table.caption.5}}
 \providecommand*\caption@xref[2]{\@setref\relax\@undefined{#1}}
-\newlabel{tab:datasets}{{1}{3}{Datasets used in the report. VietNews and WikiLingua provide the strongest held-out evidence. ViMs and VLSP remain visible in the benchmark tables but are exploratory because their current test pools overlap with project training or validation data.\relax }{table.caption.5}{}}
+\newlabel{tab:datasets}{{1}{3}{Datasets used in the report. VietNews and WikiLingua provide the strongest single-document evidence. ViMs and VLSP remain visible in the benchmark tables but have split overlap with project training or validation data.\relax }{table.caption.5}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {3}Datasets}{3}{section.3}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.1}Task and Prompt Setting}{3}{subsection.3.1}}
 \@writefile{toc}{\contentsline {subsection}{\numberline {3.2}Dataset Inventory and Validity Boundary}{3}{subsection.3.2}}
 \@writefile{toc}{\contentsline {section}{\numberline {4}Method}{3}{section.4}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {4.1}Controllable Prompt Generation}{3}{subsection.4.1}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {4.2}Supervised Fine-Tuning}{3}{subsection.4.2}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {4.3}GRPO Alignment}{3}{subsection.4.3}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {4.4}Reward Design and Anti-Hacking Safeguards}{4}{subsection.4.4}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {4.5}GRPO Variant Nomenclature and Analysis Setups}{4}{subsection.4.5}}
-\@writefile{lot}{\contentsline {table}{\numberline {2}{\ignorespaces Compact labels for the GRPO configuration bundles used in the paper. Each label denotes a bundle of settings and, where applicable, system-level safeguards; the labels should not be interpreted as variants differing in only one hyperparameter.\relax }}{5}{table.caption.6}}
-\newlabel{tab:grpo-nomenclature}{{2}{5}{Compact labels for the GRPO configuration bundles used in the paper. Each label denotes a bundle of settings and, where applicable, system-level safeguards; the labels should not be interpreted as variants differing in only one hyperparameter.\relax }{table.caption.6}{}}
-\@writefile{toc}{\contentsline {section}{\numberline {5}Experimental Results}{5}{section.5}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {5.1}Experimental Protocol}{5}{subsection.5.1}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {5.2}Main Benchmark Against External Baselines}{5}{subsection.5.2}}
-\@writefile{lot}{\contentsline {table}{\numberline {3}{\ignorespaces ROUGE-2 (\%) across the four report datasets. Bold marks the best reported value in each column and underlining marks the second-best reported value across both project and baseline rows. The two final systems and the raw Qwen3 baseline rows are evaluated under the frozen project protocol; the remaining external rows are drawn from a historical benchmark collection and should be read as contextual rather than protocol-matched reruns. ViMs and VLSP remain exploratory.\relax }}{6}{table.caption.7}}
-\newlabel{tab:benchmark-rouge}{{3}{6}{ROUGE-2 (\%) across the four report datasets. Bold marks the best reported value in each column and underlining marks the second-best reported value across both project and baseline rows. The two final systems and the raw Qwen3 baseline rows are evaluated under the frozen project protocol; the remaining external rows are drawn from a historical benchmark collection and should be read as contextual rather than protocol-matched reruns. ViMs and VLSP remain exploratory.\relax }{table.caption.7}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {5.3}Within-project Stage-wise Ablation}{6}{subsection.5.3}}
-\@writefile{toc}{\contentsline {paragraph}{SFT provides the largest stage-wise gain.}{6}{section*.12}}
-\@writefile{toc}{\contentsline {paragraph}{Fresh GRPO underperforms SFT initialization.}{6}{section*.13}}
-\@writefile{lot}{\contentsline {table}{\numberline {4}{\ignorespaces Absolute summary length distance across the four report datasets. Lower is better. Bold marks the best reported value in each column and underlining marks the second-best reported value across both project and baseline rows. The two final systems and the raw Qwen3 baseline rows use the frozen project protocol; the remaining external rows are contextual historical comparisons only. ViMs and VLSP remain exploratory.\relax }}{7}{table.caption.8}}
-\newlabel{tab:benchmark-lendist}{{4}{7}{Absolute summary length distance across the four report datasets. Lower is better. Bold marks the best reported value in each column and underlining marks the second-best reported value across both project and baseline rows. The two final systems and the raw Qwen3 baseline rows use the frozen project protocol; the remaining external rows are contextual historical comparisons only. ViMs and VLSP remain exploratory.\relax }{table.caption.8}{}}
-\@writefile{lot}{\contentsline {table}{\numberline {5}{\ignorespaces Compact within-project ablation on the two held-out single-document datasets. This table is included to explain the chosen training recipe, not as the paper's headline leaderboard.\relax }}{7}{table.caption.11}}
-\newlabel{tab:stage-ablation}{{5}{7}{Compact within-project ablation on the two held-out single-document datasets. This table is included to explain the chosen training recipe, not as the paper's headline leaderboard.\relax }{table.caption.11}{}}
-\@writefile{toc}{\contentsline {paragraph}{Observed trade-offs and backbone choice.}{7}{section*.14}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {5.4}Reward-hacking Mitigation Analysis}{7}{subsection.5.4}}
-\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces Baseline-relative improvement summary for the two final project systems. Each dataset is shown explicitly as a two-column block: positive $\Delta $R2 means higher ROUGE-2, positive LenRed means smaller absolute summary length distance, and gray cells mark unavailable values. The first two rows are raw Qwen3-4B baselines, followed by external baselines. Cell text shows the exact percentage change, while color intensity is clipped for readability.\relax }}{8}{figure.caption.9}}
-\newlabel{fig:benchmark-improvement}{{1}{8}{Baseline-relative improvement summary for the two final project systems. Each dataset is shown explicitly as a two-column block: positive $\Delta $R2 means higher ROUGE-2, positive LenRed means smaller absolute summary length distance, and gray cells mark unavailable values. The first two rows are raw Qwen3-4B baselines, followed by external baselines. Cell text shows the exact percentage change, while color intensity is clipped for readability.\relax }{figure.caption.9}{}}
-\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces Two-panel trade-off trajectory showing ROUGE-2 versus absolute summary length distance for the Base and Instruct backbones on VietNews (left) and WikiLingua (right). Arrowed lines display the observed stage sequence (Raw $\rightarrow $ SFT $\rightarrow $ SFT+GRPO v5), while standalone markers show the lower content scores of Fresh GRPO v5 without SFT initialization.\relax }}{9}{figure.caption.10}}
-\newlabel{fig:stage-ablation-trajectory}{{2}{9}{Two-panel trade-off trajectory showing ROUGE-2 versus absolute summary length distance for the Base and Instruct backbones on VietNews (left) and WikiLingua (right). Arrowed lines display the observed stage sequence (Raw $\rightarrow $ SFT $\rightarrow $ SFT+GRPO v5), while standalone markers show the lower content scores of Fresh GRPO v5 without SFT initialization.\relax }{figure.caption.10}{}}
-\@writefile{lot}{\contentsline {table}{\numberline {6}{\ignorespaces Reward-hacking mitigation from v3 to v5, computed from stored generations with the current reward implementation. Deg.\% is the fraction flagged by \texttt  {\_is\_degenerate()}; $R_{\text  {acc}}=0$\% is the fraction receiving zero content reward; Mean $R_{\text  {acc}}$ is the average content reward. The comparison is a package-level ablation and does not isolate any single change.\relax }}{9}{table.caption.15}}
-\newlabel{tab:reward-mitigation}{{6}{9}{Reward-hacking mitigation from v3 to v5, computed from stored generations with the current reward implementation. Deg.\% is the fraction flagged by \texttt {\_is\_degenerate()}; $R_{\text {acc}}=0$\% is the fraction receiving zero content reward; Mean $R_{\text {acc}}$ is the average content reward. The comparison is a package-level ablation and does not isolate any single change.\relax }{table.caption.15}{}}
-\@writefile{toc}{\contentsline {section}{\numberline {6}Conclusion}{9}{section.6}}
-\@writefile{lof}{\contentsline {figure}{\numberline {3}{\ignorespaces Paired v3--v5 examples of the two most severe reward-hacking modes from VietNews. Each card shows a reference summary (gray), the failed v3 output (red), and the recovered v5 output (green), together with failure or recovery indicators. Left: repetition loop (Base fresh; \texttt  {assistant} repeated $128$ times). Right: punctuation-driven length explosion (Base SFT-init; $245$ words of periods).\relax }}{10}{figure.caption.16}}
-\newlabel{fig:reward-cases}{{3}{10}{Paired v3--v5 examples of the two most severe reward-hacking modes from VietNews. Each card shows a reference summary (gray), the failed v3 output (red), and the recovered v5 output (green), together with failure or recovery indicators. Left: repetition loop (Base fresh; \texttt {assistant} repeated $128$ times). Right: punctuation-driven length explosion (Base SFT-init; $245$ words of periods).\relax }{figure.caption.16}{}}
-\@writefile{toc}{\contentsline {section}{\numberline {A}Appendix}{11}{appendix.A}}
-\newlabel{sec:appendix}{{A}{11}{Appendix}{appendix.A}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {A.1}Full Within-project Variant Tables}{11}{subsection.A.1}}
-\newlabel{sec:appendix-variants}{{A.1}{11}{Full Within-project Variant Tables}{subsection.A.1}{}}
-\@writefile{lot}{\contentsline {table}{\numberline {7}{\ignorespaces ROUGE-2 (\%) across all four datasets for the canonical Qwen3 project variants.\relax }}{11}{table.caption.17}}
-\newlabel{tab:appendix-rouge}{{7}{11}{ROUGE-2 (\%) across all four datasets for the canonical Qwen3 project variants.\relax }{table.caption.17}{}}
-\@writefile{lot}{\contentsline {table}{\numberline {8}{\ignorespaces Absolute summary length distance across all four datasets for the canonical Qwen3 project variants.\relax }}{11}{table.caption.18}}
-\newlabel{tab:appendix-lendist}{{8}{11}{Absolute summary length distance across all four datasets for the canonical Qwen3 project variants.\relax }{table.caption.18}{}}
-\@writefile{lot}{\contentsline {table}{\numberline {9}{\ignorespaces Relative length error (\%) across all four datasets for the canonical Qwen3 project variants.\relax }}{11}{table.caption.19}}
-\newlabel{tab:appendix-lenerr}{{9}{11}{Relative length error (\%) across all four datasets for the canonical Qwen3 project variants.\relax }{table.caption.19}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {A.2}Historical Comparison of Two GRPO Configuration Bundles}{11}{subsection.A.2}}
-\newlabel{sec:appendix-v4v5}{{A.2}{11}{Historical Comparison of Two GRPO Configuration Bundles}{subsection.A.2}{}}
-\@writefile{lot}{\contentsline {table}{\numberline {10}{\ignorespaces Historical comparison of two explored GRPO configuration bundles on VietNews and WikiLingua macro averages. These observations do not identify the effect of any individual hyperparameter or establish a globally optimal configuration.\relax }}{12}{table.caption.20}}
-\newlabel{tab:v4v5}{{10}{12}{Historical comparison of two explored GRPO configuration bundles on VietNews and WikiLingua macro averages. These observations do not identify the effect of any individual hyperparameter or establish a globally optimal configuration.\relax }{table.caption.20}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {A.3}Exploratory Multi-document Baseline Comparison}{12}{subsection.A.3}}
-\newlabel{sec:appendix-exploratory}{{A.3}{12}{Exploratory Multi-document Baseline Comparison}{subsection.A.3}{}}
-\@writefile{lot}{\contentsline {table}{\numberline {11}{\ignorespaces Exploratory relative change against each contextual baseline on the ViMs and VLSP macro average. Positive values are better for both columns, but the table is diagnostic only because both datasets overlap with project training or validation pools.\relax }}{12}{table.caption.21}}
-\newlabel{tab:appendix-benchmark-exploratory}{{11}{12}{Exploratory relative change against each contextual baseline on the ViMs and VLSP macro average. Positive values are better for both columns, but the table is diagnostic only because both datasets overlap with project training or validation pools.\relax }{table.caption.21}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {A.4}Sentence-control Results}{12}{subsection.A.4}}
-\newlabel{sec:appendix-sentence}{{A.4}{12}{Sentence-control Results}{subsection.A.4}{}}
-\@writefile{lot}{\contentsline {table}{\numberline {12}{\ignorespaces Sentence-control metrics recomputed from stored generations. ``Tol.'' counts a prediction as correct when the sentence count is within $\pm 1$ of the requested budget.\relax }}{12}{table.caption.22}}
-\newlabel{tab:appendix-sentence}{{12}{12}{Sentence-control metrics recomputed from stored generations. ``Tol.'' counts a prediction as correct when the sentence count is within $\pm 1$ of the requested budget.\relax }{table.caption.22}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {A.5}Dataset Processing Details}{12}{subsection.A.5}}
-\newlabel{sec:appendix-processing}{{A.5}{12}{Dataset Processing Details}{subsection.A.5}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {A.6}Pipeline Configurations and Prompt Templates}{13}{subsection.A.6}}
-\newlabel{sec:appendix-prompts}{{A.6}{13}{Pipeline Configurations and Prompt Templates}{subsection.A.6}{}}
-\@writefile{lot}{\contentsline {table}{\numberline {13}{\ignorespaces Prompt-construction rules used by the pipeline.\relax }}{13}{table.caption.24}}
-\newlabel{tab:appendix-prompt-rules}{{13}{13}{Prompt-construction rules used by the pipeline.\relax }{table.caption.24}{}}
-\@writefile{lot}{\contentsline {table}{\numberline {14}{\ignorespaces Control-template families generated by \textit  {PromptAugmenter}.\relax }}{13}{table.caption.25}}
-\newlabel{tab:appendix-template-families}{{14}{13}{Control-template families generated by \textit {PromptAugmenter}.\relax }{table.caption.25}{}}
-\@writefile{toc}{\contentsline {paragraph}{Data augmentation and prompt construction.}{13}{table.caption.25}}
-\@writefile{lot}{\contentsline {table}{\numberline {15}{\ignorespaces Canonical SFT configuration used by the paper.\relax }}{14}{table.caption.27}}
-\newlabel{tab:appendix-sft-config}{{15}{14}{Canonical SFT configuration used by the paper.\relax }{table.caption.27}{}}
-\@writefile{lot}{\contentsline {table}{\numberline {16}{\ignorespaces SFT per-GPU starting presets used in the canonical training runs. Auto-calibration can adjust these values at runtime.\relax }}{14}{table.caption.28}}
-\newlabel{tab:appendix-sft-gpu}{{16}{14}{SFT per-GPU starting presets used in the canonical training runs. Auto-calibration can adjust these values at runtime.\relax }{table.caption.28}{}}
-\@writefile{toc}{\contentsline {paragraph}{Canonical SFT configuration.}{14}{table.caption.28}}
-\@writefile{lot}{\contentsline {table}{\numberline {17}{\ignorespaces Canonical GRPO v5 configuration used in the main paper results.\relax }}{14}{table.caption.30}}
-\newlabel{tab:appendix-grpo-config}{{17}{14}{Canonical GRPO v5 configuration used in the main paper results.\relax }{table.caption.30}{}}
-\@writefile{lot}{\contentsline {table}{\numberline {18}{\ignorespaces GRPO per-GPU starting presets used in the canonical training runs. Auto-calibration can refine these values at runtime.\relax }}{14}{table.caption.31}}
-\newlabel{tab:appendix-grpo-gpu}{{18}{14}{GRPO per-GPU starting presets used in the canonical training runs. Auto-calibration can refine these values at runtime.\relax }{table.caption.31}{}}
-\@writefile{toc}{\contentsline {paragraph}{Canonical GRPO v5 configuration.}{14}{table.caption.31}}
-\@writefile{lot}{\contentsline {table}{\numberline {19}{\ignorespaces Frozen evaluation configuration used to generate the paper tables.\relax }}{15}{table.caption.33}}
-\newlabel{tab:appendix-eval-config}{{19}{15}{Frozen evaluation configuration used to generate the paper tables.\relax }{table.caption.33}{}}
-\@writefile{toc}{\contentsline {paragraph}{Evaluation configuration.}{15}{table.caption.33}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.1}Task Formulation, Preprocessing, and Prompt Construction}{3}{subsection.4.1}}
+\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces Overview of the proposed lightweight post-training pipeline for controllable Vietnamese summarization. The upper row summarizes task and data, preprocessing and prompt construction, Stage 1 instruction- conditioned LoRA-SFT, Stage 2 GRPO alignment, and the resulting post-trained models. The lower panel expands the GRPO training loop: prompt batches are decoded into multiple completions, rewarded for content and control adherence, normalized within each prompt group, and updated with a clipped policy objective plus KL regularization to a frozen reference model. The safeguard block summarizes the generation, detection, and formula layers used to reduce reward-hacking behavior.\relax }}{4}{figure.caption.6}}
+\newlabel{fig:method-overview}{{1}{4}{Overview of the proposed lightweight post-training pipeline for controllable Vietnamese summarization. The upper row summarizes task and data, preprocessing and prompt construction, Stage 1 instruction- conditioned LoRA-SFT, Stage 2 GRPO alignment, and the resulting post-trained models. The lower panel expands the GRPO training loop: prompt batches are decoded into multiple completions, rewarded for content and control adherence, normalized within each prompt group, and updated with a clipped policy objective plus KL regularization to a frozen reference model. The safeguard block summarizes the generation, detection, and formula layers used to reduce reward-hacking behavior.\relax }{figure.caption.6}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.2}Stage 1: Instruction-conditioned LoRA-SFT}{4}{subsection.4.2}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.3}Stage 2: GRPO Alignment}{4}{subsection.4.3}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.4}Reward Design and Anti-Hacking Safeguards}{5}{subsection.4.4}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.5}GRPO Variant Nomenclature and Canonical Configuration}{6}{subsection.4.5}}
+\@writefile{lot}{\contentsline {table}{\numberline {2}{\ignorespaces Compact nomenclature for the GRPO method variants used in the paper. Each label denotes a configuration bundle and, where applicable, a safeguard package; the labels should not be interpreted as variants differing in only one hyperparameter.\relax }}{6}{table.caption.7}}
+\newlabel{tab:grpo-nomenclature}{{2}{6}{Compact nomenclature for the GRPO method variants used in the paper. Each label denotes a configuration bundle and, where applicable, a safeguard package; the labels should not be interpreted as variants differing in only one hyperparameter.\relax }{table.caption.7}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {5}Experimental Results}{6}{section.5}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.1}Experimental Protocol}{6}{subsection.5.1}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.2}Main Benchmark Against External Baselines}{6}{subsection.5.2}}
+\@writefile{lot}{\contentsline {table}{\numberline {3}{\ignorespaces ROUGE-2 (\%) across the four report datasets. Bold marks the best reported value in each column and underlining marks the second-best reported value across both project and baseline rows. The two final systems and the raw Qwen3 baseline rows are evaluated under the frozen project protocol; the remaining external rows are drawn from a historical benchmark collection and should be read as contextual rather than protocol-matched reruns. ViMs and VLSP have split overlap.\relax }}{7}{table.caption.8}}
+\newlabel{tab:benchmark-rouge}{{3}{7}{ROUGE-2 (\%) across the four report datasets. Bold marks the best reported value in each column and underlining marks the second-best reported value across both project and baseline rows. The two final systems and the raw Qwen3 baseline rows are evaluated under the frozen project protocol; the remaining external rows are drawn from a historical benchmark collection and should be read as contextual rather than protocol-matched reruns. ViMs and VLSP have split overlap.\relax }{table.caption.8}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {4}{\ignorespaces Absolute summary length distance across the four report datasets. Lower is better. Bold marks the best reported value in each column and underlining marks the second-best reported value across both project and baseline rows. The two final systems and the raw Qwen3 baseline rows use the frozen project protocol; the remaining external rows are contextual historical comparisons only. ViMs and VLSP have split overlap.\relax }}{8}{table.caption.9}}
+\newlabel{tab:benchmark-lendist}{{4}{8}{Absolute summary length distance across the four report datasets. Lower is better. Bold marks the best reported value in each column and underlining marks the second-best reported value across both project and baseline rows. The two final systems and the raw Qwen3 baseline rows use the frozen project protocol; the remaining external rows are contextual historical comparisons only. ViMs and VLSP have split overlap.\relax }{table.caption.9}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.3}Within-project Stage-wise Ablation}{8}{subsection.5.3}}
+\@writefile{toc}{\contentsline {paragraph}{SFT provides the largest stage-wise gain.}{8}{section*.13}}
+\@writefile{toc}{\contentsline {paragraph}{Fresh GRPO underperforms SFT initialization.}{8}{section*.14}}
+\@writefile{toc}{\contentsline {paragraph}{Observed trade-offs and backbone choice.}{8}{section*.15}}
+\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces Baseline-relative improvement summary for the two final project systems. Each dataset is shown explicitly as a two-column block: positive $\Delta $R2 means higher ROUGE-2, positive LenRed means smaller absolute summary length distance, and gray cells mark unavailable values. The first two rows are raw Qwen3-4B baselines, followed by external baselines. Cell text shows the exact percentage change, while color intensity is clipped for readability.\relax }}{9}{figure.caption.10}}
+\newlabel{fig:benchmark-improvement}{{2}{9}{Baseline-relative improvement summary for the two final project systems. Each dataset is shown explicitly as a two-column block: positive $\Delta $R2 means higher ROUGE-2, positive LenRed means smaller absolute summary length distance, and gray cells mark unavailable values. The first two rows are raw Qwen3-4B baselines, followed by external baselines. Cell text shows the exact percentage change, while color intensity is clipped for readability.\relax }{figure.caption.10}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {5}{\ignorespaces Compact within-project ablation on VietNews and WikiLingua. This table is included to explain the chosen training recipe, not as the paper's headline leaderboard.\relax }}{9}{table.caption.12}}
+\newlabel{tab:stage-ablation}{{5}{9}{Compact within-project ablation on VietNews and WikiLingua. This table is included to explain the chosen training recipe, not as the paper's headline leaderboard.\relax }{table.caption.12}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.4}Reward-hacking Mitigation Analysis}{9}{subsection.5.4}}
+\@writefile{lof}{\contentsline {figure}{\numberline {3}{\ignorespaces Two-panel trade-off trajectory showing ROUGE-2 versus absolute summary length distance for the Base and Instruct backbones on VietNews (left) and WikiLingua (right). Arrowed lines display the observed stage sequence (Raw $\rightarrow $ SFT $\rightarrow $ SFT+GRPO v5), while standalone markers show the lower content scores of Fresh GRPO v5 without SFT initialization.\relax }}{10}{figure.caption.11}}
+\newlabel{fig:stage-ablation-trajectory}{{3}{10}{Two-panel trade-off trajectory showing ROUGE-2 versus absolute summary length distance for the Base and Instruct backbones on VietNews (left) and WikiLingua (right). Arrowed lines display the observed stage sequence (Raw $\rightarrow $ SFT $\rightarrow $ SFT+GRPO v5), while standalone markers show the lower content scores of Fresh GRPO v5 without SFT initialization.\relax }{figure.caption.11}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {6}Conclusion}{10}{section.6}}
+\@writefile{lot}{\contentsline {table}{\numberline {6}{\ignorespaces Reward-hacking mitigation from v3 to v5, computed from stored generations with the current reward implementation. Deg.\% is the fraction flagged as degenerate by the detection filter; $R_{\text  {acc}}=0$\% is the fraction receiving zero content reward; Mean $R_{\text  {acc}}$ is the average content reward. The comparison is a package-level ablation and does not isolate any single change.\relax }}{11}{table.caption.16}}
+\newlabel{tab:reward-mitigation}{{6}{11}{Reward-hacking mitigation from v3 to v5, computed from stored generations with the current reward implementation. Deg.\% is the fraction flagged as degenerate by the detection filter; $R_{\text {acc}}=0$\% is the fraction receiving zero content reward; Mean $R_{\text {acc}}$ is the average content reward. The comparison is a package-level ablation and does not isolate any single change.\relax }{table.caption.16}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {4}{\ignorespaces Paired v3--v5 examples of the two most severe reward-hacking modes from VietNews. Each card shows a reference summary (gray), the failed v3 output (red), and the recovered v5 output (green), together with failure or recovery indicators. Left: repetition loop (Base fresh; \texttt  {assistant} repeated $128$ times). Right: punctuation-driven length explosion (Base SFT-init; $245$ words of periods).\relax }}{12}{figure.caption.17}}
+\newlabel{fig:reward-cases}{{4}{12}{Paired v3--v5 examples of the two most severe reward-hacking modes from VietNews. Each card shows a reference summary (gray), the failed v3 output (red), and the recovered v5 output (green), together with failure or recovery indicators. Left: repetition loop (Base fresh; \texttt {assistant} repeated $128$ times). Right: punctuation-driven length explosion (Base SFT-init; $245$ words of periods).\relax }{figure.caption.17}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {A}Appendix}{13}{appendix.A}}
+\newlabel{sec:appendix}{{A}{13}{Appendix}{appendix.A}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {A.1}Full Within-project Variant Tables}{13}{subsection.A.1}}
+\newlabel{sec:appendix-variants}{{A.1}{13}{Full Within-project Variant Tables}{subsection.A.1}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {7}{\ignorespaces ROUGE-2 (\%) across all four datasets for the canonical Qwen3 project variants.\relax }}{13}{table.caption.18}}
+\newlabel{tab:appendix-rouge}{{7}{13}{ROUGE-2 (\%) across all four datasets for the canonical Qwen3 project variants.\relax }{table.caption.18}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {8}{\ignorespaces Absolute summary length distance across all four datasets for the canonical Qwen3 project variants.\relax }}{13}{table.caption.19}}
+\newlabel{tab:appendix-lendist}{{8}{13}{Absolute summary length distance across all four datasets for the canonical Qwen3 project variants.\relax }{table.caption.19}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {9}{\ignorespaces Relative length error (\%) across all four datasets for the canonical Qwen3 project variants.\relax }}{13}{table.caption.20}}
+\newlabel{tab:appendix-lenerr}{{9}{13}{Relative length error (\%) across all four datasets for the canonical Qwen3 project variants.\relax }{table.caption.20}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {A.2}Historical Comparison of Two GRPO Configuration Bundles}{13}{subsection.A.2}}
+\newlabel{sec:appendix-v4v5}{{A.2}{13}{Historical Comparison of Two GRPO Configuration Bundles}{subsection.A.2}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {10}{\ignorespaces Historical comparison of two explored GRPO configuration bundles on VietNews and WikiLingua macro averages. These observations do not identify the effect of any individual hyperparameter or establish a globally optimal configuration.\relax }}{14}{table.caption.21}}
+\newlabel{tab:v4v5}{{10}{14}{Historical comparison of two explored GRPO configuration bundles on VietNews and WikiLingua macro averages. These observations do not identify the effect of any individual hyperparameter or establish a globally optimal configuration.\relax }{table.caption.21}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {A.3}Multi-document Baseline Comparison}{14}{subsection.A.3}}
+\newlabel{sec:appendix-multidoc}{{A.3}{14}{Multi-document Baseline Comparison}{subsection.A.3}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {11}{\ignorespaces Relative change against each contextual baseline on the ViMs and VLSP macro average. Positive values are better for both columns, but the table is diagnostic only because both datasets overlap with project training or validation pools.\relax }}{14}{table.caption.22}}
+\newlabel{tab:appendix-benchmark-multidoc}{{11}{14}{Relative change against each contextual baseline on the ViMs and VLSP macro average. Positive values are better for both columns, but the table is diagnostic only because both datasets overlap with project training or validation pools.\relax }{table.caption.22}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {A.4}Sentence-control Results}{14}{subsection.A.4}}
+\newlabel{sec:appendix-sentence}{{A.4}{14}{Sentence-control Results}{subsection.A.4}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {12}{\ignorespaces Sentence-control metrics recomputed from stored generations. ``Tol.'' counts a prediction as correct when the sentence count is within $\pm 1$ of the requested budget.\relax }}{14}{table.caption.23}}
+\newlabel{tab:appendix-sentence}{{12}{14}{Sentence-control metrics recomputed from stored generations. ``Tol.'' counts a prediction as correct when the sentence count is within $\pm 1$ of the requested budget.\relax }{table.caption.23}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {A.5}Dataset Processing Details}{14}{subsection.A.5}}
+\newlabel{sec:appendix-processing}{{A.5}{14}{Dataset Processing Details}{subsection.A.5}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {A.6}Pipeline Configurations and Prompt Templates}{15}{subsection.A.6}}
+\newlabel{sec:appendix-prompts}{{A.6}{15}{Pipeline Configurations and Prompt Templates}{subsection.A.6}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {13}{\ignorespaces Prompt-construction rules used by the pipeline.\relax }}{15}{table.caption.25}}
+\newlabel{tab:appendix-prompt-rules}{{13}{15}{Prompt-construction rules used by the pipeline.\relax }{table.caption.25}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {14}{\ignorespaces Control-template families used in the pipeline.\relax }}{15}{table.caption.26}}
+\newlabel{tab:appendix-template-families}{{14}{15}{Control-template families used in the pipeline.\relax }{table.caption.26}{}}
+\@writefile{toc}{\contentsline {paragraph}{Data augmentation and prompt construction.}{15}{table.caption.26}}
+\@writefile{lot}{\contentsline {table}{\numberline {15}{\ignorespaces Canonical SFT configuration used by the paper.\relax }}{16}{table.caption.28}}
+\newlabel{tab:appendix-sft-config}{{15}{16}{Canonical SFT configuration used by the paper.\relax }{table.caption.28}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {16}{\ignorespaces SFT per-GPU starting presets used in the canonical training runs. Auto-calibration can adjust these values at runtime.\relax }}{16}{table.caption.29}}
+\newlabel{tab:appendix-sft-gpu}{{16}{16}{SFT per-GPU starting presets used in the canonical training runs. Auto-calibration can adjust these values at runtime.\relax }{table.caption.29}{}}
+\@writefile{toc}{\contentsline {paragraph}{Canonical SFT configuration.}{16}{table.caption.29}}
+\@writefile{lot}{\contentsline {table}{\numberline {17}{\ignorespaces Canonical GRPO v5 configuration used in the main paper results.\relax }}{16}{table.caption.31}}
+\newlabel{tab:appendix-grpo-config}{{17}{16}{Canonical GRPO v5 configuration used in the main paper results.\relax }{table.caption.31}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {18}{\ignorespaces GRPO per-GPU starting presets used in the canonical training runs. Auto-calibration can refine these values at runtime.\relax }}{16}{table.caption.32}}
+\newlabel{tab:appendix-grpo-gpu}{{18}{16}{GRPO per-GPU starting presets used in the canonical training runs. Auto-calibration can refine these values at runtime.\relax }{table.caption.32}{}}
+\@writefile{toc}{\contentsline {paragraph}{Canonical GRPO v5 configuration.}{16}{table.caption.32}}
+\@writefile{lot}{\contentsline {table}{\numberline {19}{\ignorespaces Frozen evaluation configuration used to generate the paper tables.\relax }}{17}{table.caption.34}}
+\newlabel{tab:appendix-eval-config}{{19}{17}{Frozen evaluation configuration used to generate the paper tables.\relax }{table.caption.34}{}}
+\@writefile{toc}{\contentsline {paragraph}{Evaluation configuration.}{17}{table.caption.34}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {A.7}No-sentence-reward Ablation}{17}{subsection.A.7}}
+\newlabel{sec:appendix-nosentence}{{A.7}{17}{No-sentence-reward Ablation}{subsection.A.7}{}}
 \bibdata{custom}
-\bibcite{amodei2016concrete}{{1}{2016}{{Amodei et~al.}}{{Amodei, Olah, Steinhardt, Christiano, Schulman, and Man{\'e}}}}
-\bibcite{bohm2019betterrewards}{{2}{2019}{{B{\"o}hm et~al.}}{{B{\"o}hm, Gao, Meyer, Shapira, Dagan, and Gurevych}}}
-\bibcite{chan2021cmdp}{{3}{2021}{{Chan et~al.}}{{Chan, Wang, and King}}}
-\bibcite{fan2018controllable}{{4}{2018}{{Fan et~al.}}{{Fan, Grangier, and Auli}}}
-\bibcite{gao2022scaling}{{5}{2022}{{Gao et~al.}}{{Gao, Schulman, and Hilton}}}
-\bibcite{he2020ctrlsum}{{6}{2020}{{He et~al.}}{{He, Kry{\'s}ci{\'n}ski, McCann, Rajani, and Xiong}}}
-\bibcite{hu2021lora}{{7}{2021}{{Hu et~al.}}{{Hu, Shen, Wallis, Allen-Zhu, Li, Wang, and Chen}}}
-\bibcite{jie2024lengthcontrol}{{8}{2024}{{Jie et~al.}}{{Jie, Meng, Shang, Jiang, and Liu}}}
-\bibcite{instructcmp2024}{{9}{2024}{{Juseon-Do et~al.}}{{Juseon-Do, Kwon, Kamigaito, and Okumura}}}
-\bibcite{kikuchi2016controlling}{{10}{2016}{{Kikuchi et~al.}}{{Kikuchi, Neubig, Sasano, Takamura, and Okumura}}}
-\bibcite{ladhak2020wikilingua}{{11}{2020}{{Ladhak et~al.}}{{Ladhak, Durmus, Cardie, and McKeown}}}
-\bibcite{lam2023viesum}{{12}{2023}{{Lam et~al.}}{{Lam, Doan, Pham, and Kalita}}}
-\bibcite{liu2023instrusum}{{13}{2023}{{Liu et~al.}}{{Liu, Fabbri, Chen, Zhao, Han, Joty, Liu, Radev, Wu, and Cohan}}}
-\bibcite{miculicich2023precise}{{14}{2023}{{Miculicich et~al.}}{{Miculicich, Xie, Wang, and He}}}
-\bibcite{nguyen2019vnds}{{15}{2019}{{Nguyen et~al.}}{{Nguyen, Nguyen, Nguyen, and Nguyen}}}
-\bibcite{phan2022vit5}{{16}{2022}{{Phan et~al.}}{{Phan, Tran, Nguyen, and Trinh}}}
-\bibcite{shao2024deepseekmath}{{17}{2024}{{Shao et~al.}}{{Shao, Wang, Zhu, Xu, Song, Bi, Zhang, Zhang, Li, Wu et~al.}}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {A.7}No-sentence-reward Ablation}{16}{subsection.A.7}}
-\newlabel{sec:appendix-nosentence}{{A.7}{16}{No-sentence-reward Ablation}{subsection.A.7}{}}
-\@writefile{lot}{\contentsline {table}{\numberline {20}{\ignorespaces No-sentence-reward ablation computed from a frozen evaluation snapshot. The differences are too small under the current sampling-based protocol to support a clean causal statement.\relax }}{16}{table.caption.34}}
-\newlabel{tab:appendix-nosentence}{{20}{16}{No-sentence-reward ablation computed from a frozen evaluation snapshot. The differences are too small under the current sampling-based protocol to support a clean causal statement.\relax }{table.caption.34}{}}
-\bibcite{skalse2022rewardhacking}{{18}{2022}{{Skalse et~al.}}{{Skalse, Howe, Krasheninnikov, and Krueger}}}
-\bibcite{stiennon2020summarize}{{19}{2020}{{Stiennon et~al.}}{{Stiennon, Ouyang, Wu, Ziegler, Lowe, Voss, Radford, Amodei, and Christiano}}}
-\bibcite{takase2019positional}{{20}{2019}{{Takase and Okazaki}}{{}}}
-\bibcite{tran2023abmusu}{{21}{2023}{{Tran et~al.}}{{Tran, Le, Can, and Nguyen}}}
-\bibcite{tran2020vims}{{22}{2020}{{Tran et~al.}}{{Tran, Nghiem, Nguyen, Nguyen, Chi, and Dinh}}}
+\@writefile{lot}{\contentsline {table}{\numberline {20}{\ignorespaces No-sentence-reward ablation computed from a frozen evaluation snapshot. The differences are too small under the current sampling-based protocol to support a clean causal statement.\relax }}{18}{table.caption.35}}
+\newlabel{tab:appendix-nosentence}{{20}{18}{No-sentence-reward ablation computed from a frozen evaluation snapshot. The differences are too small under the current sampling-based protocol to support a clean causal statement.\relax }{table.caption.35}{}}

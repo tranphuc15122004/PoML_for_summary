@@ -105,8 +105,8 @@ def rouge_l_f1(generated: str, reference: str) -> float:
     if not generated or not reference:
         return 0.0
 
-    gen_tokens = generated.strip().split()
-    ref_tokens = reference.strip().split()
+    gen_tokens = generated.strip().lower().split()
+    ref_tokens = reference.strip().lower().split()
 
     if not gen_tokens or not ref_tokens:
         return 0.0
