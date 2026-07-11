@@ -1,13 +1,22 @@
-% \pdfoutput=1
+% Vietnamese rendering in this project setup requires XeLaTeX; pdflatex is unsupported.
 
 \documentclass[11pt]{article}
 \usepackage[final]{acl}
 
-\usepackage{times}
+\usepackage{fontspec}
+\defaultfontfeatures{Ligatures=TeX}
+\setmainfont[
+  Path=/usr/share/fonts/urw-base35/,
+  UprightFont=NimbusRoman-Regular.otf,
+  ItalicFont=NimbusRoman-Italic.otf,
+  BoldFont=NimbusRoman-Bold.otf,
+  BoldItalicFont=NimbusRoman-BoldItalic.otf
+]{Nimbus Roman}
 \renewcommand{\ttdefault}{lmtt}
+\newfontfamily\vietfont[Scale=MatchLowercase]{DejaVu Serif}
+\newcommand{\vn}[1]{{\vietfont #1}}
+\newenvironment{vnblock}{\begingroup\vietfont}{\endgroup}
 \usepackage{latexsym}
-\usepackage[T1]{fontenc}
-\usepackage[utf8]{inputenc}
 \usepackage{microtype}
 \usepackage{graphicx}
 \usepackage{booktabs}
@@ -73,11 +82,11 @@
 \maketitle
 
 \begin{abstract}
-Controllable Vietnamese summarization requires a model to preserve source content while also obeying explicit output budgets.
-We present an empirical study of a lightweight post-training pipeline that combines instruction-conditioned LoRA supervised fine-tuning (SFT) with a custom group relative policy optimization (GRPO) loop for two Qwen3-4B backbones.
-The main paper evaluates the resulting post-trained systems on four datasets (VietNews, WikiLingua, ViMs, and VLSP) and situates them against contextual baselines such as VietAI, GPT-4o, GPT-3.5-Turbo, Qwen3-14B, and Llama3.3-70B-Instruct using ROUGE-2 and absolute summary length distance.
-On the two single-document datasets that support our strongest claims, the final \texttt{SFT + GRPO v5} systems substantially improve over their raw Qwen3 backbones and compare favorably to several historical, non-protocol-matched external rows while keeping low length distance; the Instruct system reaches 29.62 ROUGE-2 on VietNews, and the Base system reaches 26.35 on WikiLingua.
-We keep ViMs and VLSP visible in the benchmark tables as multi-document diagnostics whose current test pools overlap with project training or validation data. Their weaker and less consistent performance is plausibly explained by the current training setup: multi-document supervision is extremely scarce, contributes only minimally to the dominant SFT stage, and is represented through flat document-cluster concatenation rather than explicit cross-document modeling. Targeted ablations further show that SFT is the dominant improvement stage, that warm-starting GRPO from the SFT checkpoint is better than applying GRPO directly to the pretrained backbone, and that the safeguarded reward design sharply reduces failure-prone behavior relative to the earlier GRPO setup. The code for the project is available at \url{https://github.com/tranphuc15122004/PoML_for_summary}.
+Controllable Vietnamese summarization requires a model to preserve source content while obeying explicit output budgets.
+We study a lightweight post-training pipeline combining instruction-conditioned LoRA-SFT with a custom GRPO loop for two Qwen3-4B backbones.
+On the single-document datasets VietNews and WikiLingua, the final \texttt{SFT + GRPO v5} systems substantially improve over their raw backbones and compare favorably to several historical baselines; the Instruct system reaches 29.62 ROUGE-2 on VietNews, and the Base system reaches 26.35 on WikiLingua.
+ViMs and VLSP appear as multi-document diagnostics with split overlap caveats.
+Ablations show that SFT is the dominant improvement stage, that warm-starting GRPO from the SFT checkpoint outperforms fresh GRPO, and that the safeguarded reward design sharply reduces failure-prone behavior. Code is available at \url{https://github.com/tranphuc15122004/PoML_for_summary}.
 \end{abstract}
 
 \section{Introduction}
@@ -146,6 +155,8 @@ ViMs and VLSP remain in the main benchmark because they reveal how the final sys
 
 \begin{table}[t]
 \centering
+\caption{Datasets used in the report. VietNews and WikiLingua provide the strongest single-document evidence. ViMs and VLSP remain visible in the benchmark tables but have split overlap with project training or validation data}
+\label{tab:datasets}
 \small
 \resizebox{\linewidth}{!}{%
 \begin{tabular}{L{0.19\linewidth}L{0.18\linewidth}L{0.11\linewidth}L{0.13\linewidth}L{0.27\linewidth}}
@@ -158,8 +169,6 @@ ViMs & Multi-document news clusters & 300 & Multi & Test overlaps 240 train and 
 VLSP & Multi-document summarization & 300 & Multi & Test overlaps 285 train and 15 val. items \\
 \bottomrule
 \end{tabular}}
-\caption{Datasets used in the report. VietNews and WikiLingua provide the strongest single-document evidence. ViMs and VLSP remain visible in the benchmark tables but have split overlap with project training or validation data.}
-\label{tab:datasets}
 \end{table}
 
 After preprocessing, SFT uses 111,150 samples: 96,911 VietNews items whose titles contain at least 10 whitespace-delimited words, 13,999 WikiLingua items, and 240 ViMs clusters.
@@ -335,7 +344,7 @@ content overlap captured by $R_{\text{acc}}$ can remain.
 At the \textbf{formula} layer, the multiplicative gate structurally prevents
 constraint-only optimization: no amount of length or sentence adherence can
 compensate for zero content quality. Additionally, the upper-bound constraint
-``khong qua $X$ tu'' enforces a floor of $\max(3, 0.15 \times \text{max\_wc})$
+``\vn{không quá $X$ từ}'' enforces a floor of $\max(3, 0.15 \times \text{max\_wc})$
 words; outputs shorter than this floor receive $R_{\text{len}}=0$, closing
 the loophole of satisfying the constraint with one- or two-word garbage.
 
@@ -349,6 +358,11 @@ labels used throughout the remainder of the paper.
 
 \begin{table}[H]
 \centering
+\caption{Compact nomenclature for the GRPO method variants used in the paper.
+Each label denotes a configuration bundle and, where applicable, a safeguard
+package; the labels should not be interpreted as variants differing in only
+one hyperparameter}
+\label{tab:grpo-nomenclature}
 \small
 \begin{tabularx}{\columnwidth}{L{0.19\columnwidth}YL{0.24\columnwidth}}
 \toprule
@@ -359,11 +373,6 @@ v4 (historical bundle) & $K=4$, learning rate $5\times10^{-7}$, $\beta=0.15$ & B
 v5 (canonical bundle) & $K=8$, learning rate $2\times10^{-6}$, $\beta=0.04$; gated reward and safeguards & Main paper configuration \\
 \bottomrule
 \end{tabularx}
-\caption{Compact nomenclature for the GRPO method variants used in the paper.
-Each label denotes a configuration bundle and, where applicable, a safeguard
-package; the labels should not be interpreted as variants differing in only
-one hyperparameter.}
-\label{tab:grpo-nomenclature}
 \end{table}
 
 The canonical final systems instantiate the SFT-initialized \texttt{v5}
@@ -394,6 +403,8 @@ The two project rows are the final \texttt{SFT + GRPO v5} systems, and the remai
 
 \begin{table*}[t]
 \centering
+\caption{ROUGE-2 (\%) across the four report datasets. Bold marks the best reported value in each column and underlining marks the second-best reported value across both project and baseline rows. The two final systems and the raw Qwen3 baseline rows are evaluated under the frozen project protocol; the remaining external rows are drawn from a historical benchmark collection and should be read as contextual rather than protocol-matched reruns. ViMs and VLSP have split overlap}
+\label{tab:benchmark-rouge}
 \small
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{L{0.36\textwidth}cccc}
@@ -419,12 +430,12 @@ Sailor-20B-chat & 17.70 & 18.74 & 39.47 & 40.96 \\
 VinBigdata (7B) & 20.59 & 21.02 & 37.98 & 40.23 \\
 \bottomrule
 \end{tabular}}
-\caption{ROUGE-2 (\%) across the four report datasets. Bold marks the best reported value in each column and underlining marks the second-best reported value across both project and baseline rows. The two final systems and the raw Qwen3 baseline rows are evaluated under the frozen project protocol; the remaining external rows are drawn from a historical benchmark collection and should be read as contextual rather than protocol-matched reruns. ViMs and VLSP have split overlap.}
-\label{tab:benchmark-rouge}
 \end{table*}
 
 \begin{table*}[t]
 \centering
+\caption{Absolute summary length distance across the four report datasets. Lower is better. Bold marks the best reported value in each column and underlining marks the second-best reported value across both project and baseline rows. The two final systems and the raw Qwen3 baseline rows use the frozen project protocol; the remaining external rows are contextual historical comparisons only. ViMs and VLSP have split overlap}
+\label{tab:benchmark-lendist}
 \small
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{L{0.36\textwidth}cccc}
@@ -435,11 +446,11 @@ Model & VietNews & WikiLingua & ViMs & VLSP \\
 Qwen3-4B-Base + SFT + GRPO v5 & \best{1.16} & \best{8.35} & 89.23 & 100.50 \\
 Qwen3-4B-Instruct + SFT + GRPO v5 & \second{1.52} & \second{10.25} & 84.45 & 82.71 \\
 \midrule
-\multicolumn{5}{l}{\textit{Raw Qwen3 baselines (frozen project protocol)}} \\
+\multicolumn{5}{l}{\textit{Raw Qwen3 baselines}} \\
 Qwen3-4B-Base (raw) & 33.03 & 61.59 & 92.01 & 120.33 \\
 Qwen3-4B-Instruct (raw) & 4.01 & 23.42 & \second{59.80} & 70.17 \\
 \midrule
-\textit{Historical external baselines} \\
+\textit{External baselines} \\
 VietAI & -- & -- & -- & -- \\
 GPT-4o & 8 & 11 & 187 & 58 \\
 GPT-3.5-Turbo & 18 & 17 & \best{47} & \best{30} \\
@@ -450,8 +461,6 @@ Sailor-20B-chat & 38 & 43 & 268 & 41 \\
 VinBigdata (7B) & 115 & 89 & 98 & 82 \\
 \bottomrule
 \end{tabular}}
-\caption{Absolute summary length distance across the four report datasets. Lower is better. Bold marks the best reported value in each column and underlining marks the second-best reported value across both project and baseline rows. The two final systems and the raw Qwen3 baseline rows use the frozen project protocol; the remaining external rows are contextual historical comparisons only. ViMs and VLSP have split overlap.}
-\label{tab:benchmark-lendist}
 \end{table*}
 
 Figure~\ref{fig:benchmark-improvement} summarizes the same benchmark in terms of percentage improvement of the two final systems over each baseline.
@@ -493,6 +502,8 @@ To better visualize this multi-stage interaction on the primary dual objectives�
 
 \begin{table*}[t]
 \centering
+\caption{Compact within-project ablation on VietNews and WikiLingua. This table is included to explain the chosen training recipe, not as the paper's headline leaderboard}
+\label{tab:stage-ablation}
 \small
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{L{0.28\textwidth}cccc}
@@ -509,8 +520,6 @@ Instruct + fresh GRPO v5 & 18.67 & 8.09 & 2.95 & 16.12 \\
 Instruct + SFT + GRPO v5 & \best{29.62} & \second{25.59} & 1.52 & 10.25 \\
 \bottomrule
 \end{tabular}}
-\caption{Compact within-project ablation on VietNews and WikiLingua. This table is included to explain the chosen training recipe, not as the paper's headline leaderboard.}
-\label{tab:stage-ablation}
 \end{table*}
 
 The stage-wise comparison yields three observations about the evaluated training recipe:
@@ -546,7 +555,7 @@ R_{\text{total}} = w_{\text{acc}}R_{\text{acc}} + w_{\text{len}}R_{\text{len}} +
 which allowed the constraint terms to contribute independently of content: a model could score $\approx 0.50$ by satisfying length and sentence budgets with garbage while ignoring $R_{\text{acc}}$.
 Second, a repetition penalty of $1.3$ was applied by the HuggingFace decoder over the full $\approx 2{,}000$-token input sequence, penalizing the model for reusing any vocabulary from the source article and pushing generation toward out-of-distribution symbols.
 Third, n-gram blocking with size $3$ blocked source trigrams, forbidding named entities and key Vietnamese content words.
-The resulting failure modes, concentrated in the Base branches where the pretrained backbone lacks the instruction-following prior of the Instruct model, included repetition loops (e.g., \texttt{assistant} repeated $128$ times, $\text{ROUGE-2}=0.0$), punctuation padding ($245$ words of periods, $\text{LenErr}=1189\%$), digit blobs that satisfied ``khong qua $X$ tu'' with $R_{\text{len}}=1.0$ and $R_{\text{acc}}=0$, and comma-separated token loops carrying no semantic content.
+The resulting failure modes, concentrated in the Base branches where the pretrained backbone lacks the instruction-following prior of the Instruct model, included repetition loops (e.g., \texttt{assistant} repeated $128$ times, $\text{ROUGE-2}=0.0$), punctuation padding ($245$ words of periods, $\text{LenErr}=1189\%$), digit blobs that satisfied ``\vn{không quá $X$ từ}'' with $R_{\text{len}}=1.0$ and $R_{\text{acc}}=0$, and comma-separated token loops carrying no semantic content.
 Figure~\ref{fig:reward-cases} illustrates the two most severe modes qualitatively.
 Appendix~\ref{sec:appendix-v4v5} records the historical bundle-level v4-v5 comparison, and Appendix~\ref{sec:appendix-nosentence} keeps the sentence-reward ablation that remains inconclusive under the frozen sampling protocol.
 
@@ -554,6 +563,8 @@ The canonical v5 bundle addresses each root cause through the defense-in-depth s
 
 \begin{table*}[t]
 \centering
+\caption{Reward-hacking mitigation from v3 to v5, computed from stored generations with the current reward implementation. Deg.\% is the fraction flagged as degenerate by the detection filter; $R_{\text{acc}}=0$\% is the fraction receiving zero content reward; Mean $R_{\text{acc}}$ is the average content reward. The comparison is a package-level ablation and does not isolate any single change}
+\label{tab:reward-mitigation}
 \small
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{L{0.24\textwidth}ccccc}
@@ -570,8 +581,6 @@ Instruct SFT-init v3 & 25.06 & 19.94 & 0.94 & 1.19 & 0.3837 \\
 Instruct SFT-init v5 & \best{27.65} & \second{15.85} & 1.42 & \second{0.45} & \best{0.4213} \\
 \bottomrule
 \end{tabular}}
-\caption{Reward-hacking mitigation from v3 to v5, computed from stored generations with the current reward implementation. Deg.\% is the fraction flagged as degenerate by the detection filter; $R_{\text{acc}}=0$\% is the fraction receiving zero content reward; Mean $R_{\text{acc}}$ is the average content reward. The comparison is a package-level ablation and does not isolate any single change.}
-\label{tab:reward-mitigation}
 \end{table*}
 
 Table~\ref{tab:reward-mitigation} reports the quantitative evidence.
@@ -594,25 +603,15 @@ Appendix~\ref{sec:appendix-sentence} retains the sentence-control results that j
 
 \section{Conclusion}
 Controllable Vietnamese summarization is not only a content-generation problem, but also an alignment problem: the model must preserve salient information while obeying explicit budgets on summary length and sentence count.
-This paper studies that problem in a lightweight post-training setting for Qwen3-4B models, with the goal of identifying a practical recipe that improves controllability without full-model retraining.
+This paper studies that problem in a lightweight post-training setting for Qwen3-4B models and finds that a two-stage recipe---instruction-conditioned LoRA-SFT followed by GRPO alignment with a safeguarded reward---improves controllability without full-model retraining.
 
-The resulting method is a two-stage pipeline.
-Stage 1 uses instruction-conditioned LoRA-SFT to teach summarization behavior together with control-aware instruction following, and Stage 2 applies GRPO alignment to refine policy behavior under those constraints.
-The main contribution of the second stage is not only the PPO-style policy update, but the full reward-and-safeguard package around it: a gated reward that makes content quality a prerequisite for constraint reward, prompt-aware length and sentence rewards, and defense-in-depth anti-hacking measures spanning generation settings, degeneracy detection, and formula-level protection.
-
-Across VietNews and WikiLingua, this recipe improves substantially over the raw Qwen3 backbones and clarifies the role of each stage.
-SFT provides the largest quality gain, while SFT-initialized GRPO further improves the ROUGE-length trade-off; by contrast, fresh GRPO remains clearly weaker than warm-started GRPO.
+Across VietNews and WikiLingua, the proposed recipe improves substantially over the raw Qwen3 backbones and clarifies the role of each stage.
+SFT provides the largest quality gain, SFT-initialized GRPO further improves the ROUGE-length trade-off, and fresh GRPO remains clearly weaker than warm-started GRPO.
 In the final benchmark, the Instruct pipeline achieves the highest VietNews ROUGE-2 ($29.62$), while the Base pipeline yields the strongest length control on the primary single-document datasets, reaching absolute length distances of $1.16$ on VietNews and $8.35$ on WikiLingua.
-The reward-hacking analysis adds a second practical insight: GRPO is effective in this setting only when coupled with an appropriate reward design, because the v5 safeguard bundle sharply reduces degenerate outputs and stabilizes the previously fragile branches.
 
-The paper's conclusions are intentionally bounded.
-Strong single-document claims are supported only on VietNews and WikiLingua; ViMs and VLSP remain diagnostic only because of split overlap. Their weaker results are also plausible under the present training recipe itself: multi-document supervision is severely underrepresented, contributes little to the dominant SFT stage, and is optimized with flat cluster serialization plus a single-reference ROUGE-oriented reward that is better matched to single-document control than to cross-document fusion.
-The external baseline rows are useful context rather than protocol-matched reruns, and the frozen evaluation protocol still relies on sampling without a saved seed.
-Moreover, the present experiments do not causally isolate the contribution of each safeguard component or each hyperparameter inside the v3, v4, and v5 GRPO bundles.
-
-Future work should therefore strengthen multi-document coverage, evaluation, and causal analysis as much as model capability.
-The most important next steps are to build leakage-free multi-document testbeds, expand and rebalance multi-document supervision during both SFT and GRPO, compare flat cluster serialization with more structure-aware encodings or hierarchical fusion mechanisms, rerun competitive baselines under a shared protocol, save deterministic evaluation seeds, and conduct targeted ablations that separate initialization choice, reward terms, safeguard layers, and GRPO configuration effects.
-With those extensions, the pipeline developed here can serve as a stronger foundation for controllable Vietnamese summarization beyond the present single-document setting.
+These conclusions remain intentionally bounded.
+Strong claims are supported only on VietNews and WikiLingua; ViMs and VLSP remain diagnostic because of split overlap and because multi-document supervision is both scarce and weakly matched to the current flat, single-reference training setup.
+The main future priorities are therefore to build leakage-free multi-document testbeds, strengthen multi-document supervision and structure-aware modeling, and run cleaner ablations and protocol-matched evaluations to isolate the effects of initialization, reward design, safeguards, and GRPO configuration.
 
 \clearpage
 \appendix
@@ -628,6 +627,8 @@ These tables are retained as internal context, but they are not the headline ben
 
 \begin{table}[H]
 \centering
+\caption{ROUGE-2 (\%) across all four datasets for the canonical Qwen3 project variants}
+\label{tab:appendix-rouge}
 \small
 \resizebox{\linewidth}{!}{%
 \begin{tabular}{L{0.34\linewidth}cccc}
@@ -644,12 +645,12 @@ Instruct + fresh GRPO v5 & 18.67 & 8.09 & 18.43 & 16.05 \\
 Instruct + SFT + GRPO v5 & \best{29.62} & \second{25.59} & 21.27 & 24.39 \\
 \bottomrule
 \end{tabular}}
-\caption{ROUGE-2 (\%) across all four datasets for the canonical Qwen3 project variants.}
-\label{tab:appendix-rouge}
 \end{table}
 
 \begin{table}[H]
 \centering
+\caption{Absolute summary length distance across all four datasets for the canonical Qwen3 project variants}
+\label{tab:appendix-lendist}
 \small
 \resizebox{\linewidth}{!}{%
 \begin{tabular}{L{0.34\linewidth}cccc}
@@ -666,12 +667,12 @@ Instruct + fresh GRPO v5 & 2.95 & 16.12 & \second{63.05} & 72.91 \\
 Instruct + SFT + GRPO v5 & 1.52 & 10.25 & 84.45 & 82.71 \\
 \bottomrule
 \end{tabular}}
-\caption{Absolute summary length distance across all four datasets for the canonical Qwen3 project variants.}
-\label{tab:appendix-lendist}
 \end{table}
 
 \begin{table}[H]
 \centering
+\caption{Relative length error (\%) across all four datasets for the canonical Qwen3 project variants}
+\label{tab:appendix-lenerr}
 \small
 \resizebox{\linewidth}{!}{%
 \begin{tabular}{L{0.34\linewidth}cccc}
@@ -688,8 +689,6 @@ Instruct + fresh GRPO v5 & 17.08 & 38.67 & \second{28.37} & 28.76 \\
 Instruct + SFT + GRPO v5 & 9.24 & \second{18.11} & 39.14 & 32.85 \\
 \bottomrule
 \end{tabular}}
-\caption{Relative length error (\%) across all four datasets for the canonical Qwen3 project variants.}
-\label{tab:appendix-lenerr}
 \end{table}
 
 \subsection{Historical Comparison of Two GRPO Configuration Bundles}
@@ -699,6 +698,8 @@ Because only two operating points were evaluated, three hyperparameters change j
 
 \begin{table}[H]
 \centering
+\caption{Historical comparison of two explored GRPO configuration bundles on VietNews and WikiLingua macro averages. These observations do not identify the effect of any individual hyperparameter or establish a globally optimal configuration}
+\label{tab:v4v5}
 \small
 \resizebox{\linewidth}{!}{%
 \begin{tabular}{L{0.20\linewidth}rrrrrr}
@@ -711,13 +712,50 @@ Instruct fresh & 12.39 & 13.38 & 33.98 & 27.88 & 11.65 & 9.50 \\
 Instruct SFT-init & 26.23 & 27.60 & 13.09 & 13.68 & 6.00 & 5.85 \\
 \bottomrule
 \end{tabular}}
-\caption{Historical comparison of two explored GRPO configuration bundles on VietNews and WikiLingua macro averages. These observations do not identify the effect of any individual hyperparameter or establish a globally optimal configuration.}
-\label{tab:v4v5}
 \end{table}
 
 Across the stored runs, v5 has higher ROUGE-2 in all four branches and lower length distance in all four branches.
 Relative length error is lower under v5 in three branches and slightly higher for Instruct SFT-init.
 These values are retained for transparency and hypothesis generation only, not as evidence for a causal configuration claim.
+
+\subsection{Single-document Baseline Comparison}
+\label{sec:appendix-singledoc}
+Table~\ref{tab:appendix-singledoc} provides the full baseline-relative improvement percentages on VietNews and WikiLingua.
+It complements the heatmap in Figure~\ref{fig:benchmark-improvement} by providing exact numerical values for the single-document columns.
+
+\begin{table}[H]
+\centering
+\caption{Relative improvement on VietNews and WikiLingua. $\Delta$R2 and LenRed are defined as in Figure~\ref{fig:benchmark-improvement}}
+\label{tab:appendix-singledoc}
+\small
+\resizebox{\linewidth}{!}{%
+\begin{tabular}{L{0.21\linewidth}rrrrrrrr}
+\toprule
+\multirow{2}{*}{\textbf{Baseline}} &
+\multicolumn{4}{c}{\textbf{Base final}} & \multicolumn{4}{c}{\textbf{Instruct final}} \\
+\cmidrule(lr){2-5} \cmidrule(lr){6-9}
+& \multicolumn{2}{c}{VietNews} & \multicolumn{2}{c}{WikiLingua} &
+  \multicolumn{2}{c}{VietNews} & \multicolumn{2}{c}{WikiLingua} \\
+\cmidrule(lr){2-3} \cmidrule(lr){4-5} \cmidrule(lr){6-7} \cmidrule(lr){8-9}
+& $\Delta$R2$\uparrow$ & LenRed$\uparrow$ & $\Delta$R2$\uparrow$ & LenRed$\uparrow$ &
+  $\Delta$R2$\uparrow$ & LenRed$\uparrow$ & $\Delta$R2$\uparrow$ & LenRed$\uparrow$ \\
+\midrule
+\multicolumn{9}{l}{\textit{Raw Qwen3 baselines}} \\
+Qwen3-4B-Base (raw) & +138.8 & +96.5 & +728.6 & +86.4 & +144.2 & +95.4 & +704.7 & +83.4 \\
+Qwen3-4B-Instruct (raw) & +75.8 & +71.1 & +254.2 & +64.3 & +79.7 & +62.1 & +243.9 & +56.2 \\
+\midrule
+\multicolumn{9}{l}{\textit{External baselines}} \\
+GPT-4o & +34.1 & +85.5 & +27.6 & +24.1 & +37.1 & +81.0 & +23.9 & +6.8 \\
+GPT-3.5-Turbo & +3.0 & +93.6 & +24.9 & +50.9 & +5.3 & +91.6 & +21.3 & +39.7 \\
+Qwen3-14B & +56.5 & +97.7 & +30.2 & +81.4 & +60.0 & +97.0 & +26.4 & +77.2 \\
+Llama3.3-70B-Instruct & +30.7 & +91.7 & +35.8 & +35.8 & +33.6 & +89.1 & +31.9 & +21.2 \\
+Phi4-14B & +119.9 & +99.4 & +84.5 & +96.1 & +124.9 & +99.3 & +79.2 & +95.2 \\
+Sailor-20B-chat & +63.7 & +96.9 & +40.6 & +80.6 & +67.3 & +96.0 & +36.6 & +76.2 \\
+VinBigdata (7B) & +40.7 & +99.0 & +25.4 & +90.6 & +43.9 & +98.7 & +21.7 & +88.5 \\
+\bottomrule
+\end{tabular}}
+\end{table}
+
 
 \subsection{Multi-document Baseline Comparison}
 \label{sec:appendix-multidoc}
@@ -726,6 +764,8 @@ It is retained in the appendix because it is useful diagnostic context, but it s
 
 \begin{table}[H]
 \centering
+\caption{Relative change against each contextual baseline on the ViMs and VLSP macro average.}
+\label{tab:appendix-benchmark-multidoc}
 \small
 \resizebox{\linewidth}{!}{%
 \begin{tabular}{L{0.30\linewidth}cccc}
@@ -736,6 +776,11 @@ Baseline &
 \cmidrule(lr){2-3} \cmidrule(lr){4-5}
 & $\Delta$ ROUGE-2$\uparrow$ & LenDist reduction$\uparrow$ & $\Delta$ ROUGE-2$\uparrow$ & LenDist reduction$\uparrow$ \\
 \midrule
+\multicolumn{5}{l}{\textit{Raw Qwen3 baselines}} \\
+Qwen3-4B-Base (raw) & +55.2 & +10.7 & +99.0 & +21.3 \\
+Qwen3-4B-Instruct (raw) & +6.8 & -46.0 & +37.0 & -28.6 \\
+\midrule
+\multicolumn{5}{l}{\textit{External baselines}} \\
 VietAI & -- & -- & -- & -- \\
 GPT-4o & -59.4\% & +22.6\% & -47.9\% & +31.8\% \\
 GPT-3.5-Turbo & \best{-35.3\%} & -146.4\% & \best{-17.1\%} & -117.1\% \\
@@ -746,9 +791,8 @@ Sailor-20B-chat & -55.7\% & \best{+38.6\%} & -43.2\% & \best{+45.9\%} \\
 VinBigdata (7B) & -54.5\% & -5.4\% & -41.6\% & +7.1\% \\
 \bottomrule
 \end{tabular}}
-\caption{Relative change against each contextual baseline on the ViMs and VLSP macro average. Positive values are better for both columns, but the table is diagnostic only because both datasets overlap with project training or validation pools.}
-\label{tab:appendix-benchmark-multidoc}
 \end{table}
+
 
 \subsection{Sentence-control Results}
 \label{sec:appendix-sentence}
@@ -756,6 +800,8 @@ Sentence-control results are retained here because the main paper focuses on ROU
 
 \begin{table}[H]
 \centering
+\caption{Sentence-control metrics recomputed from stored generations. ``Tol.'' counts a prediction as correct when the sentence count is within $\pm 1$ of the requested budget}
+\label{tab:appendix-sentence}
 \small
 \resizebox{\linewidth}{!}{%
 \begin{tabular}{L{0.26\linewidth}cccccc}
@@ -772,8 +818,6 @@ Instruct + fresh GRPO v5 & 94.85 & \best{99.60} & \second{0.056} & 46.8 & 72.4 &
 Instruct + SFT + GRPO v5 & \best{96.95} & 99.05 & \best{0.041} & \second{78.8} & 95.6 & \second{0.340} \\
 \bottomrule
 \end{tabular}}
-\caption{Sentence-control metrics recomputed from stored generations. ``Tol.'' counts a prediction as correct when the sentence count is within $\pm 1$ of the requested budget.}
-\label{tab:appendix-sentence}
 \end{table}
 
 \subsection{Dataset Processing Details}
@@ -794,11 +838,13 @@ The most important preprocessing rules are listed below.
 \label{sec:appendix-prompts}
 This subsection summarizes the end-to-end pipeline configuration used by the paper.
 The source of truth is the project's canonical configuration files, training scripts, evaluation pipeline, and audit documentation.
-Prompt examples are shown in an ASCII-friendly transliteration for toolchain compatibility, but they follow the same instruction format used throughout the pipeline.
+Prompt examples are shown in Vietnamese Unicode and require XeLaTeX in this project setup, but they follow the same instruction format used throughout the pipeline.
 
 \paragraph{Data augmentation and prompt construction.}
 \begin{table}[H]
 \centering
+\caption{Prompt-construction rules used by the pipeline}
+\label{tab:appendix-prompt-rules}
 \small
 \begin{tabular}{L{0.17\linewidth}L{0.20\linewidth}L{0.28\linewidth}L{0.25\linewidth}}
 \toprule
@@ -809,23 +855,21 @@ GRPO train/val & system + user & Rotates three length templates and three senten
 Evaluation/test & system + user & Deterministic test prompt; template index fixed to 0 & prompt, reference, and metadata \\
 \bottomrule
 \end{tabular}
-\caption{Prompt-construction rules used by the pipeline.}
-\label{tab:appendix-prompt-rules}
 \end{table}
 
 \begin{table}[H]
 \centering
+\caption{Control-template families used in the pipeline}
+\label{tab:appendix-template-families}
 \small
 \begin{tabular}{L{0.18\linewidth}L{0.34\linewidth}L{0.34\linewidth}}
 \toprule
 Signal & Template families & Notes \\
 \midrule
-Length & \textit{khoang X tu}; \textit{trong khoang lo-hi tu}; \textit{khong qua X tu} & SFT uses only the first form; GRPO rotates all three; eval fixes the first form \\
-Sentence & \textit{khoang X cau}; \textit{trong khoang lo-hi cau}; \textit{khong qua X cau} & Same rotation policy as the length templates \\
+Length & \textit{\vn{khoảng X từ}}; \textit{\vn{trong khoảng lo-hi từ}}; \textit{\vn{không quá X từ}} & SFT uses only the first form; GRPO rotates all three; eval fixes the first form \\
+Sentence & \textit{\vn{khoảng X câu}}; \textit{\vn{trong khoảng lo-hi câu}}; \textit{\vn{không quá X câu}} & Same rotation policy as the length templates \\
 \bottomrule
 \end{tabular}
-\caption{Control-template families used in the pipeline.}
-\label{tab:appendix-template-families}
 \end{table}
 
 All prompt-bearing samples preserve metadata for the reward functions and analysis logs.
@@ -834,6 +878,8 @@ The core metadata fields are target length, target sentence count, length requir
 \paragraph{Canonical SFT configuration.}
 \begin{table}[H]
 \centering
+\caption{Canonical SFT configuration used by the paper}
+\label{tab:appendix-sft-config}
 \small
 \begin{tabular}{L{0.34\linewidth}L{0.56\linewidth}}
 \toprule
@@ -848,12 +894,12 @@ Batch calibration & Enabled before training \\
 Checkpoint behavior & Model-family-specific output directory; resume from latest checkpoint when present \\
 \bottomrule
 \end{tabular}
-\caption{Canonical SFT configuration used by the paper.}
-\label{tab:appendix-sft-config}
 \end{table}
 
 \begin{table}[H]
 \centering
+\caption{SFT per-GPU starting presets used in the canonical training runs. Auto-calibration can adjust these values at runtime}
+\label{tab:appendix-sft-gpu}
 \small
 \begin{tabular}{lccc}
 \toprule
@@ -864,8 +910,6 @@ A100 & 6 & 3 & 18 \\
 V100 & 2 & 4 & 8 \\
 \bottomrule
 \end{tabular}
-\caption{SFT per-GPU starting presets used in the canonical training runs. Auto-calibration can adjust these values at runtime.}
-\label{tab:appendix-sft-gpu}
 \end{table}
 
 The appendix tables intentionally follow the launch-script presets rather than the raw library defaults, because the launch scripts are the source of truth for the canonical paper runs.
@@ -873,6 +917,8 @@ The appendix tables intentionally follow the launch-script presets rather than t
 \paragraph{Canonical GRPO v5 configuration.}
 \begin{table}[H]
 \centering
+\caption{Canonical GRPO v5 configuration used in the main paper results}
+\label{tab:appendix-grpo-config}
 \small
 \begin{tabular}{L{0.34\linewidth}L{0.56\linewidth}}
 \toprule
@@ -886,12 +932,12 @@ Stability settings & Gradient checkpointing enabled, thinking mode suppressed, a
 Repetition controls & Repetition penalty $1.0$, n-gram blocking disabled \\
 \bottomrule
 \end{tabular}
-\caption{Canonical GRPO v5 configuration used in the main paper results.}
-\label{tab:appendix-grpo-config}
 \end{table}
 
 \begin{table}[H]
 \centering
+\caption{GRPO per-GPU starting presets used in the canonical training runs. Auto-calibration can refine these values at runtime}
+\label{tab:appendix-grpo-gpu}
 \small
 \begin{tabular}{lccc}
 \toprule
@@ -902,8 +948,6 @@ A100 & 2 & 8 & 16 \\
 V100 & 1 & 16 & 16 \\
 \bottomrule
 \end{tabular}
-\caption{GRPO per-GPU starting presets used in the canonical training runs. Auto-calibration can refine these values at runtime.}
-\label{tab:appendix-grpo-gpu}
 \end{table}
 
 For reference only, the main ablation bundle changes are \textit{v4}: $K=4$, $\mathit{lr} = 5\times10^{-7}$, $\beta = 0.15$; \textit{v3} and \textit{v4} remain ablation settings and should not be read as the canonical appendix configuration.
@@ -911,6 +955,8 @@ For reference only, the main ablation bundle changes are \textit{v4}: $K=4$, $\m
 \paragraph{Evaluation configuration.}
 \begin{table}[H]
 \centering
+\caption{Frozen evaluation configuration used to generate the paper tables}
+\label{tab:appendix-eval-config}
 \small
 \begin{tabular}{L{0.34\linewidth}L{0.56\linewidth}}
 \toprule
@@ -925,23 +971,23 @@ Metrics in main paper & ROUGE-2 and Length Distance; sentence-control kept in ap
 Randomness & One-shot low-temperature sampling; no saved seed \\
 \bottomrule
 \end{tabular}
-\caption{Frozen evaluation configuration used to generate the paper tables.}
-\label{tab:appendix-eval-config}
 \end{table}
 
 \noindent\textbf{SFT prompt example.}\par\smallskip
 \noindent\colorbox{promptbg}{%
 \begin{minipage}{\dimexpr\textwidth-2\fboxsep\relax}
 \small\vspace{4pt}
-\textbf{System:} Ban la mot tro ly AI chuyen tom tat van ban tieng Viet. Hay tao ra ban tom tat ngan gon, chinh xac, tuan thu dung yeu cau ve do dai va so cau.
+\textbf{System:} \vn{Bạn là một trợ lý AI chuyên tóm tắt văn bản tiếng Việt. Hãy tạo ra bản tóm tắt ngắn gọn, chính xác, tuân thủ đúng yêu cầu về độ dài và số câu.}
 
 \smallskip
 \textbf{User:}
+\begin{vnblock}
 \begin{itemize}
-  \item Do dai: khoang 22 tu
-  \item So cau: khoang 1 cau
+  \item Độ dài: khoảng 22 từ
+  \item Số câu: khoảng 1 câu
 \end{itemize}
-Van ban: \textless{}source article\textgreater
+\vn{Văn bản:} \textless{}source article\textgreater
+\end{vnblock}
 
 \smallskip
 \textbf{Assistant:}
@@ -954,22 +1000,24 @@ Van ban: \textless{}source article\textgreater
 \noindent\colorbox{promptbg}{%
 \begin{minipage}{\dimexpr\textwidth-2\fboxsep\relax}
 \small\vspace{4pt}
-\textbf{System:} Ban la mot tro ly AI chuyen tom tat van ban tieng Viet. Hay tao ra ban tom tat ngan gon, chinh xac, tuan thu dung yeu cau ve do dai va so cau.
+\textbf{System:} \vn{Bạn là một trợ lý AI chuyên tóm tắt văn bản tiếng Việt. Hãy tạo ra bản tóm tắt ngắn gọn, chính xác, tuân thủ đúng yêu cầu về độ dài và số câu.}
 
 \smallskip
 \textbf{User:}
+\begin{vnblock}
 \begin{itemize}
-  \item Do dai: trong khoang 18--26 tu
-  \item So cau: trong khoang 1--2 cau
+  \item Độ dài: trong khoảng 18--26 từ
+  \item Số câu: trong khoảng 1--2 câu
 \end{itemize}
-Van ban: \textless{}source article\textgreater
+\vn{Văn bản:} \textless{}source article\textgreater
+\end{vnblock}
 
 \smallskip
 \textit{reference} = \textless{}gold summary\textgreater\\
 \textit{meta.target\_length} = 22\\
 \textit{meta.target\_sentences} = 1\\
-\textit{meta.length\_requirement} = ``trong khoang 18--26 tu''\\
-\textit{meta.sentence\_requirement} = ``trong khoang 1--2 cau''
+\textit{meta.length\_requirement} = ``\vn{trong khoảng 18--26 từ}''\\
+\textit{meta.sentence\_requirement} = ``\vn{trong khoảng 1--2 câu}''
 \vspace{4pt}
 \end{minipage}}
 
@@ -978,15 +1026,17 @@ Van ban: \textless{}source article\textgreater
 \noindent\colorbox{promptbg}{%
 \begin{minipage}{\dimexpr\textwidth-2\fboxsep\relax}
 \small\vspace{4pt}
-\textbf{System:} Ban la mot tro ly AI chuyen tom tat van ban tieng Viet. Hay tao ra ban tom tat ngan gon, chinh xac, tuan thu dung yeu cau ve do dai va so cau.
+\textbf{System:} \vn{Bạn là một trợ lý AI chuyên tóm tắt văn bản tiếng Việt. Hãy tạo ra bản tóm tắt ngắn gọn, chính xác, tuân thủ đúng yêu cầu về độ dài và số câu.}
 
 \smallskip
 \textbf{User:}
+\begin{vnblock}
 \begin{itemize}
-  \item Do dai: khoang 22 tu
-  \item So cau: khoang 1 cau
+  \item Độ dài: khoảng 22 từ
+  \item Số câu: khoảng 1 câu
 \end{itemize}
-Van ban: \textless{}source article\textgreater
+\vn{Văn bản:} \textless{}source article\textgreater
+\end{vnblock}
 
 \smallskip
 \textit{reference} = \textless{}gold summary\textgreater\\
@@ -1004,6 +1054,8 @@ Both sides of the comparison still use sampling without a saved evaluation seed,
 
 \begin{table}[H]
 \centering
+\caption{No-sentence-reward ablation computed from a frozen evaluation snapshot. The differences are too small under the current sampling-based protocol to support a clean causal statement}
+\label{tab:appendix-nosentence}
 \small
 \begin{tabular}{L{0.26\linewidth}rrrrr}
 \toprule
@@ -1015,8 +1067,6 @@ Base SFT-init v4 & 0.2 & \second{26.71} & \second{20.82} & \second{73.39} & 2.00
 Base SFT-init ablation & 0.0 & \best{26.85} & \best{17.21} & \best{73.65} & 1.452 \\
 \bottomrule
 \end{tabular}
-\caption{No-sentence-reward ablation computed from a frozen evaluation snapshot. The differences are too small under the current sampling-based protocol to support a clean causal statement.}
-\label{tab:appendix-nosentence}
 \end{table}
 
 \bibliography{custom}
