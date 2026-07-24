@@ -31,13 +31,13 @@ scripts/
 src/SFT_GRPO/               # training code
   train_sft.py              #   SFTTrainer + LoRA/QLoRA, auto-batch-calibration
   train_grpo.py             #   custom GRPO loop (rollout → reward → advantage → PG)
-  rewards.py                #   R_acc (ROUGE-L), R_len, R_sent, degenerate detector
+  rewards.py                #   R_acc (ROUGE-1 + ROUGE-L), R_len, R_sent, degenerate detector
   evaluate.py               #   compare base / SFT / GRPO models
   config.py                 #   SFTConfig, GRPOConfig, EvalConfig, ModelConfig
   metrics_logger.py         #   CSV/metrics logging to output_dir
 src/dataset/                # data pipeline
   dataset.py                #   VietNews, WikiLingua, ViMs, VLSP loaders
-  augmenter.py              #   injects length/style instructions into raw data
+  augmenter.py              #   injects length and sentence instructions into raw data
   length_profiler.py        #   word-count distribution analysis
 VDT_Textsum/                # raw data (gitignored)
 data/                       # generated JSONL splits (gitignored)
@@ -157,21 +157,21 @@ Degenerate outputs detected by `_is_degenerate()`: repetition loops, blobs, near
 
 - `learning_rate=5e-7` (default) or 2e-6 (v5) — very low; GRPO is sensitive to large updates.
 - Custom training loop (not `TRL.GRPOTrainer`). LoRA applied via `get_peft_model`.
-- Reference model = frozen copy of policy base (same initial weights).
+- Reference model = frozen policy at the selected GRPO start: base for fresh, base+SFT for SFT-init, or the resumed GRPO checkpoint for continuation.
 - **`repetition_penalty` must stay 1.0** — HF applies it over full input_ids including the source article. >1 penalises reusing article vocabulary, collapsing R_acc to ≈0.
 - **`no_repeat_ngram_size` must stay 0** — >0 forbids n-grams from the source article, corrupting short Vietnamese summaries.
-- Total steps: 800 (v3/v4) or configured via `TOTAL_STEPS` (v5).
-- Ablation checkpoints saved every `save_steps`; `best/` symlink for best checkpoint.
+- Canonical v3-v5 runs use 800 steps; `TOTAL_STEPS` can override this for other runs.
+- Ablation checkpoints saved every `save_steps`; `best/` stores the best checkpoint.
 - v5 requires `NUM_GEN=8` (K=8), which doubles VRAM per prompt vs K=4.
 
 ## Data pipeline
 
-- `augmenter.py` reads raw datasets from `VDT_Textsum/`, generates 5 JSONL splits under `data/`.
+- `augmenter.py` reads raw datasets from `VDT_Textsum/` and generates the train/val/test JSONL artefacts under `data/`.
 - Data sources: VietNews (~105K), WikiLingua (~14K), ViMs (300), VLSP (285).
 - **Leakage warning**: ViMs/VLSP test overlaps with train/val — only VietNews and WikiLingua support generalization claims.
-- SFT: 3× augmentation per raw sample (`num_variants=3`), random length/style.
+- SFT: one constraint-conditioned sample per retained raw item; SFT uses the approximate length/sentence templates.
 - GRPO prompts: no assistant response — model generates K completions during training.
-- Meta fields (`length_requirement`, `style`) carried in every sample for reward functions.
+- Meta fields (`length_requirement`, `sentence_requirement`, and target counts) are carried in prompt samples for reward functions.
 - Length reward tolerances: `khoảng X từ` = ±20%, `trong khoảng lo-hi` = exact range, `không quá X` = max.
 
 ## Eval results (canonical artefacts)
@@ -198,7 +198,7 @@ Degenerate outputs detected by `_is_degenerate()`: repetition loops, blobs, near
 
 ## Modifying configs
 
-All configs are Python `dataclasses` in `src/SFT_GRPO/config.py`. Edit them directly or pass CLI args. For PBS runs, override via `-v KEY=VAL` on `qsub` or by writing a JSON override config file. `ModelConfig.model_name_or_path` defaults to `Qwen2.5-3B-Instruct` — always override to a Qwen3-4B path for Qwen3 experiments.
+All configs are Python `dataclasses` in `src/SFT_GRPO/config.py`. Edit them directly or pass CLI args. For PBS runs, override via `-v KEY=VAL` on `qsub` or by writing a JSON override config file. The library default model path is legacy Qwen2.5; canonical Qwen3 experiments must override it.
 
 ## Output paths
 

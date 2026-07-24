@@ -2,6 +2,7 @@
 # =============================================================================
 # Smoke Test - Kiểm tra pipeline trước khi submit batch job
 # Chạy trên interactive GPU node
+# NOTE: legacy smoke test for the pre-Qwen3 data/model schema; not the canonical evaluation protocol.
 # Usage: bash scripts/smoke_test.sh
 # =============================================================================
 

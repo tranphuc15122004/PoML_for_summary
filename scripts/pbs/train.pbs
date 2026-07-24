@@ -10,6 +10,7 @@
 #PBS -j oe
 
 # ==============================================================================
+# NOTE: legacy full-pipeline launcher with older defaults; canonical runs use the Qwen3-specific PBS scripts.
 # PoML for Summary - Full Training Pipeline PBS Script
 # ==============================================================================
 # Usage:

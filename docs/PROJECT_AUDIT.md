@@ -216,9 +216,57 @@ Nếu không hoàn thành kịp:
 - chuyển thành future work / protocol appendix;
 - không để thiếu phần này làm thay đổi narrative chính của paper.
 
-## 11. Tài liệu nào nên dùng khi viết
+## 11. Primary source-disjoint evaluation manifest
+
+The reproducible audit is implemented in `scripts/tools/audit_data_integrity.py`.
+It hashes Unicode-NFKC-normalized sources after whitespace collapse and removes
+test sources overlapping any SFT or GRPO train/validation file.
+
+The current audit finds `610` overlapping test records (`10` VietNews, `300`
+ViMs, `300` VLSP). The primary standardized manifest is
+`data/test_clean_single_document.jsonl` with `1,990` VietNews and `500`
+WikiLingua records; the machine-readable report is
+`models/data_audit/integrity_report.json`.
+
+## 12. Tài liệu nào nên dùng khi viết
 
 - `docs/PROJECT_AUDIT.md`: provenance, validity, claim boundary
 - `docs/report.md`: bảng kết quả và diễn giải chính
 - `docs/REPORT_OUTLINE.md`: khung ACL 8 trang
 - `docs/qwen3_training_report.md`: snapshot lịch sử, không phải nguồn claim cuối
+
+## 13. Completed deterministic evaluation snapshot
+
+PBS job `174156827.gadi-pbs` completed with exit status `0` on an NVIDIA H200.
+The final run is `models/eval_results/clean_single_greedy/20260720_065129`.
+It contains 16 model files with 2,490 examples each, evaluated using deterministic
+decoding and 256 maximum new tokens. BARTScore was unavailable in the offline
+environment and was disabled; ROUGE-2, length error, length distance, and
+average generated length were computed.
+
+The deterministic run's best overall ROUGE-2 is `0.2939` for Instruct SFT+GRPO v5;
+VietNews best is `0.3025` for the same model and WikiLingua best is `0.2631`
+for Base SFT+GRPO v5. The primary manuscript table and stage-ablation figure
+
+## 14. ACL benchmark evidence boundary
+
+The ACL manuscript uses the standardized source-disjoint suite as its primary
+evidence: the manifest, prompt template, tokenizer truncation, deterministic
+decoding, output normalization, scorer version, and generation counts are
+recorded together. `scripts/tools/analyze_acl_primary_eval.py` recomputes
+sentence exact/tolerant/MAE metrics, reward-robustness audit fields, and paired
+bootstrap intervals from the saved generations; its default is 10,000 paired
+resamples.
+
+The external-baseline rows (VietAI, GPT-4o, GPT-3.5-Turbo, Qwen3-14B,
+Llama3.3-70B-Instruct, Phi-4-14B, Sailor-20B-chat, and VinBigdata-7B) remain
+historical context until each model is rerun under the same contract. No direct
+superiority claim is valid before a model ID/revision, prompt hash, manifest
+hash, decoding request, scorer provenance, and complete generation bundle are
+available. The contract and preflight checklist are maintained in
+`docs/ACL_BASELINE_EVAL_PROTOCOL.md`.
+
+ViMs/VLSP records are diagnostic only: their current clusters overlap project
+training or validation. A cross-domain claim requires a new cluster-disjoint
+partition (or independent corpus), retraining of affected branches, and a
+rerun of the full external suite.

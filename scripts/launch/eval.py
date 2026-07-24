@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Evaluate all trained summarization models on the test set.
 
-Auto-discovers available models (Qwen2.5-3B, Qwen3.5-4B, aug/no-aug).
+Auto-discovers Qwen3-4B Base/Instruct models and optional legacy families.
 Computes ROUGE-2, length error, BARTScore.
 
 Usage:
@@ -12,7 +12,7 @@ Usage:
     PYTHONPATH=src python scripts/launch/eval.py
 
     # Specific family
-    PYTHONPATH=src python scripts/launch/eval.py --families qwen2.5
+    PYTHONPATH=src python scripts/launch/eval.py --families qwen3
 
     # Custom model paths
     PYTHONPATH=src python scripts/launch/eval.py --models "base=/path/to/model,sft=/path/to/adapter/final"
@@ -180,6 +180,10 @@ def main():
         "--batch_size", type=int, default=8,
         help="Generation batch size"
     )
+    parser.add_argument("--deterministic", action="store_true", help="Use greedy decoding")
+    parser.add_argument("--temperature", type=float, default=0.3)
+    parser.add_argument("--top_p", type=float, default=0.9)
+    parser.add_argument("--seed", type=int, default=None)
     args = parser.parse_args()
 
     # ── Resolve model paths ──────────────────────────────────────────────
@@ -224,7 +228,11 @@ def main():
         models=[ModelEntry(n, p) for n, p in valid_models.items()],
         test_datasets=[DatasetEntry(dataset_name, args.test_data)],
         batch_size=args.batch_size,
+        temperature=0.0 if args.deterministic else args.temperature,
         output_dir=args.output_dir,
+        top_p=args.top_p,
+        do_sample=not args.deterministic,
+        seed=args.seed,
         max_samples=max_samples,
         enable_bart_score=enable_bart,
     )

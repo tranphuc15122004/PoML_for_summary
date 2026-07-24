@@ -2,6 +2,7 @@
 # =============================================================================
 # Smoke Test GRPO - Kiểm tra GRPO training trên Tesla T4 (16 GB)
 # =============================================================================
+# NOTE: archived legacy smoke test from an earlier project layout; not the canonical Qwen3 pipeline.
 set -euo pipefail
 
 PROJECT_ROOT="/home/tuantb/PoTR_article_summary"
@@ -115,7 +116,7 @@ r2 = length_reward(gen65, 'không quá 50 từ')
 print(f'  65 words (over): {r2} ✓ (expected > 0)')
 "
 
-check "Accuracy reward (ROUGE-L)" python -c "
+check "Legacy accuracy-reward smoke check" python -c "
 from SFT_GRPO.rewards import accuracy_reward, rouge_l_f1
 # Exact match
 r = accuracy_reward('trời đẹp', 'trời đẹp')

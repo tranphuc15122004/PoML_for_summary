@@ -6,7 +6,7 @@ Metrics: ROUGE-2 F1, Length Error (%), BARTScore (log P(gen|article))
 Usage:
     # CLI — single test file, multiple models
     PYTHONPATH=src python src/evaluation/evaluate.py \\
-        --models "base=Qwen/Qwen2.5-3B-Instruct,sft=models/sft_lora/final" \\
+        --models "base=/g/data/hn98/dd9648/models/Qwen3-4B-Base,sft=models/sft_qwen3_4b_base/final" \\
         --test_data data/test.jsonl
 
     # Config file
@@ -14,7 +14,7 @@ Usage:
 
     # Quick smoke test (no BARTScore, few samples)
     PYTHONPATH=src python src/evaluation/evaluate.py \\
-        --models "base=Qwen/Qwen2.5-3B-Instruct" \\
+        --models "base=/g/data/hn98/dd9648/models/Qwen3-4B-Base" \\
         --test_data data/test.jsonl \\
         --max_samples 20 --no_bart_score
 """
@@ -23,11 +23,14 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import logging
 import os
+import random
 import re
 import sys
+import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
@@ -60,6 +63,25 @@ except ImportError:
 # ==============================================================================
 
 logger = logging.getLogger(__name__)
+
+def _normalise_source(text: str) -> str:
+    """Canonicalize source text before hashing for split-provenance checks."""
+    text = unicodedata.normalize("NFKC", text or "")
+    return " ".join(text.split())
+
+
+def _source_hash(text: str) -> str:
+    return hashlib.sha256(_normalise_source(text).encode("utf-8")).hexdigest()
+
+
+def _seed_everything(seed: Optional[int]) -> None:
+    if seed is None:
+        return
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
 
 def _setup_logging(output_dir: str) -> None:
@@ -101,6 +123,9 @@ class EvalConfig:
     batch_size: int = 8
     max_new_tokens: int = 256
     temperature: float = 0.3
+    top_p: float = 0.9
+    do_sample: bool = True
+    seed: Optional[int] = None
     bart_checkpoint: str = "facebook/bart-large-cnn"
     bart_batch_size: int = 4
     bart_device: str = "cuda" if torch.cuda.is_available() else "cpu"
@@ -121,6 +146,9 @@ def _parse_config(args: argparse.Namespace) -> EvalConfig:
         cfg.batch_size = data.get("batch_size", cfg.batch_size)
         cfg.max_new_tokens = data.get("max_new_tokens", cfg.max_new_tokens)
         cfg.temperature = data.get("temperature", cfg.temperature)
+        cfg.top_p = data.get("top_p", cfg.top_p)
+        cfg.do_sample = data.get("do_sample", cfg.do_sample)
+        cfg.seed = data.get("seed", cfg.seed)
         cfg.bart_checkpoint = data.get("bart_checkpoint", cfg.bart_checkpoint)
         cfg.bart_batch_size = data.get("bart_batch_size", cfg.bart_batch_size)
         cfg.bart_device = data.get("bart_device", cfg.bart_device)
@@ -157,6 +185,15 @@ def _parse_config(args: argparse.Namespace) -> EvalConfig:
         cfg.enable_bart_score = False
     if args.batch_size is not None:
         cfg.batch_size = args.batch_size
+    if args.temperature is not None:
+        cfg.temperature = args.temperature
+    if args.top_p is not None:
+        cfg.top_p = args.top_p
+    if args.deterministic:
+        cfg.temperature = 0.0
+        cfg.do_sample = False
+    if args.seed is not None:
+        cfg.seed = args.seed
 
     return cfg
 
@@ -233,6 +270,8 @@ def generate_summaries(
     prompts: List[str],
     max_new_tokens: int = 256,
     temperature: float = 0.3,
+    top_p: float = 0.9,
+    do_sample: bool = True,
     batch_size: int = 8,
 ) -> List[str]:
     summaries: List[str] = []
@@ -246,15 +285,19 @@ def generate_summaries(
             return_tensors="pt",
         ).to(model.device)
 
-        outputs = model.generate(
+        generation_kwargs = dict(
             **inputs,
             max_new_tokens=max_new_tokens,
-            temperature=temperature,
-            top_p=0.9,
-            do_sample=temperature > 0,
             pad_token_id=tokenizer.pad_token_id,
             eos_token_id=tokenizer.eos_token_id,
         )
+        # Avoid sampling-only knobs in greedy mode; some Transformers versions
+        # warn or reject temperature=0 when sampling is disabled.
+        if do_sample and temperature > 0:
+            generation_kwargs.update(temperature=temperature, top_p=top_p, do_sample=True)
+        else:
+            generation_kwargs["do_sample"] = False
+        outputs = model.generate(**generation_kwargs)
 
         for j, output_ids in enumerate(outputs):
             prompt_len = inputs.input_ids[j].shape[0]
@@ -399,6 +442,8 @@ def evaluate_model_on_dataset(
         model, tokenizer, prompt_texts,
         max_new_tokens=cfg.max_new_tokens,
         temperature=cfg.temperature,
+        top_p=cfg.top_p,
+        do_sample=cfg.do_sample,
         batch_size=cfg.batch_size,
     )
 
@@ -409,10 +454,11 @@ def evaluate_model_on_dataset(
         bart_batch_size=cfg.bart_batch_size,
     )
 
-    for s, meta in zip(per_sample, meta_list):
+    for s, meta, article in zip(per_sample, meta_list, articles):
         s["model"] = model_name
         s["dataset"] = dataset_name
         s["meta_dataset"] = meta.get("dataset", "")
+        s["source_hash"] = _source_hash(article)
 
     return per_sample
 
@@ -500,10 +546,26 @@ def save_results(
             "models": [{"name": m.name, "path": m.path} for m in cfg.models],
             "test_datasets": [{"name": d.name, "path": d.path} for d in cfg.test_datasets],
             "max_samples": cfg.max_samples,
+            "temperature": cfg.temperature,
+            "top_p": cfg.top_p,
+            "do_sample": cfg.do_sample,
+            "seed": cfg.seed,
             "bart_checkpoint": cfg.bart_checkpoint if cfg.enable_bart_score else None,
         },
+        "manifest_hashes": {},
         "results": rows,
     }
+    # Hash the ordered, de-duplicated source list for each evaluated dataset.
+    for dataset_name in sorted({s["dataset"] for s in all_per_sample}):
+        seen = set()
+        hashes = []
+        for sample in all_per_sample:
+            if sample["dataset"] == dataset_name and sample["source_hash"] not in seen:
+                seen.add(sample["source_hash"])
+                hashes.append(sample["source_hash"])
+        summary["manifest_hashes"][dataset_name] = hashlib.sha256(
+            "\n".join(hashes).encode("ascii")
+        ).hexdigest()
     with open(os.path.join(run_dir, "summary.json"), "w", encoding="utf-8") as f:
         json.dump(summary, f, ensure_ascii=False, indent=2)
 
@@ -576,6 +638,10 @@ def main() -> None:
     parser.add_argument("--batch_size", type=int, default=None)
     parser.add_argument("--max_samples", type=int, default=None)
     parser.add_argument("--no_bart_score", action="store_true", help="Disable BARTScore")
+    parser.add_argument("--temperature", type=float, default=None)
+    parser.add_argument("--top_p", type=float, default=None)
+    parser.add_argument("--deterministic", action="store_true", help="Use greedy decoding")
+    parser.add_argument("--seed", type=int, default=None)
     args = parser.parse_args()
 
     cfg = _parse_config(args)
@@ -586,6 +652,7 @@ def main() -> None:
         parser.error("No test data specified. Use --test_data or provide a config file.")
 
     _setup_logging(cfg.output_dir)
+    _seed_everything(cfg.seed)
     logger.info(f"Evaluating {len(cfg.models)} model(s) on {len(cfg.test_datasets)} dataset(s)")
 
     if cfg.enable_bart_score and not _BARTSCORE_AVAILABLE:

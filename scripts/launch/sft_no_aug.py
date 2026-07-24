@@ -1,5 +1,6 @@
 #!/usr/bin/env python
-"""Launch SFT — NON-AUGMENTED data (plain summarization, no length/style constraints).
+"""Launch SFT on plain summarization data without length/sentence constraints.
+# NOTE: convenience launcher retained for historical/auxiliary SFT runs; canonical paper runs use train_sft_qwen3_4b.pbs.
 
 Supports any model. Auto-derives output_dir and run_name from model name.
 

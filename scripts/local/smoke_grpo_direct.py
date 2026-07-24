@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 """Direct smoke test for GRPO pipeline (Tesla T4 16GB compatible)."""
+# NOTE: legacy diagnostic script; its Qwen2.5 settings are not canonical.
 
 import sys, os, json, gc, logging
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'src'))

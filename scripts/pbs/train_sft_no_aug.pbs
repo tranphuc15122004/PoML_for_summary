@@ -9,7 +9,8 @@
 #PBS -j oe
 
 # ==============================================================================
-# SFT — Non-augmented data (plain summarization, no length/style constraints)
+# SFT - Plain summarization data (no length or sentence-count instructions)
+# NOTE: auxiliary SFT launcher; canonical paper runs use train_sft_qwen3_4b.pbs.
 # Supports any model via MODEL_PATH env var.
 # Submit: qsub scripts/pbs/train_sft_no_aug.pbs
 #        qsub -v MODEL_PATH=/path/to/model,EPOCHS=10 scripts/pbs/train_sft_no_aug.pbs

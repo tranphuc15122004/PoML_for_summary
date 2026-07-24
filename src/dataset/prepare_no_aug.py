@@ -1,4 +1,4 @@
-"""Prepare plain (non-augmented) SFT data — no length/style constraints.
+"""Prepare plain SFT data without length or sentence constraints.
 
 Generates one sample per raw article using a simple summarization instruction.
 Output: data/sft_train_no_aug.jsonl, data/sft_val_no_aug.jsonl
@@ -115,7 +115,7 @@ def main(data_root: str = "VDT_Textsum", out_dir: str = "data"):
 
     logger.info(
         f"\nDone. Train: {len(train_samples):,}  Val: {len(val_samples):,}\n"
-        f"(vs augmented: train ×3 = {len(train_samples)*3:,} samples)"
+        f"(vs constraint-conditioned data: one generated sample per raw item)"
     )
 
 

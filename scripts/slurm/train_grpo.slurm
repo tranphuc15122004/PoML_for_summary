@@ -1,5 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=poml_grpo_training
+# NOTE: legacy Slurm launcher with older defaults; canonical runs use the Qwen3-specific PBS scripts.
 #SBATCH --partition=gpu
 #SBATCH --nodes=1
 #SBATCH --ntasks=1

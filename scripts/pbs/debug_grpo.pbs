@@ -10,6 +10,7 @@
 #PBS -j oe
 #PBS -m n
 
+# NOTE: legacy debug script; the canonical current model family is Qwen3-4B.
 # ==============================================================================
 # PoML for Summary — Debug GRPO (smoke test trên HPC)
 # ==============================================================================

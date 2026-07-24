@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Post-training pipeline for Vietnamese text summarization with constraint control. The project fine-tunes small LLMs (default: `Qwen/Qwen2.5-3B-Instruct`) to follow Vietnamese summarization instructions with length control, style/persona control, and structured output control. Training follows a two-stage pipeline: SFT → GRPO alignment.
+Post-training pipeline for controllable Vietnamese summarization using Qwen3-4B Base and Instruct backbones. The current objective is content quality plus length and sentence-count control; style/persona control is not part of the canonical report. Training follows SFT -> GRPO alignment.
 
 **Research context:** Viettel AI R&D project. Datasets live in `VDT_Textsum/` (not committed). Models output to `models/`.
 
@@ -41,7 +41,7 @@ Raw datasets expected at `VDT_Textsum/{VietNews,WikiLingua,VLSP,ViMs}/`.
 PYTHONPATH=src python scripts/launch/sft.py
 
 # CLI with overrides
-PYTHONPATH=src python src/SFT_GRPO/train_sft.py --model_name Qwen/Qwen2.5-3B-Instruct --output_dir models/sft_lora --epochs 1.0
+PYTHONPATH=src python src/SFT_GRPO/train_sft.py --model_name /g/data/hn98/dd9648/models/Qwen3-4B-Base --output_dir models/sft_lora --epochs 1.0
 
 # Resume from checkpoint
 PYTHONPATH=src python src/SFT_GRPO/train_sft.py --resume models/sft_lora/checkpoint-500
@@ -94,8 +94,8 @@ src/
     ├── config.py           # Dataclasses: ModelConfig, SFTConfig, GRPOConfig, EvalConfig
     ├── train_sft.py        # SFTTrainer wrapper (TRL SFTTrainer + LoRA/QLoRA)
     ├── train_grpo.py       # Custom GRPOTrainer: rollout → reward → advantage → policy gradient
-    ├── rewards.py          # Three reward functions: R_acc (ROUGE-L), R_len (word count adherence),
-    │                         R_style (LLM-as-Judge 1–5 scale). Composite: w_acc·R_acc + w_len·R_len + w_style·R_style
+    ├── rewards.py          # R_acc (ROUGE-1 + ROUGE-L), R_len, R_sent, degenerate detector
+    │                         Gated reward: R_acc * (1 + w_len*R_len + w_sent*R_sent)
     ├── metrics_logger.py   # MetricsTracker + MetricsCallback (CSV logging to output_dir/metrics/)
     └── evaluate.py         # Evaluation pipeline
 ```
@@ -103,17 +103,17 @@ src/
 
 ### Key design decisions
 
-- **Data format:** SFT data uses `{"messages": [...], "meta": {...}}` JSONL. GRPO data uses `{"prompt": [...], "reference": "...", "meta": {...}}` JSONL. The `meta` field carries `length_requirement` and `style` for reward computation.
-- **Augmentation strategy:** Each raw sample generates 3 SFT variants with different length templates (`khoảng X từ`, `trong khoảng lo-hi từ`, `không quá X từ`) and randomly sampled styles. GRPO uses harder/more diverse styles than SFT.
+- **Data format:** SFT uses messages plus metadata; GRPO uses prompt, reference, and metadata. Metadata carries length and sentence requirements.
+- **Augmentation strategy:** Each raw sample produces one SFT sample. SFT uses the approximate template; GRPO rotates approximate, range, and upper-bound length/sentence templates.
 - **GRPO implementation:** Custom training loop (not TRL's GRPOTrainer). Maintains a frozen reference model alongside the trainable policy. Loss = clipped policy gradient + β·KL.
 - **LoRA config:** Default rank=32, alpha=32 (scaling=1), targeting all attention + MLP projections.
 - **Config override:** Both `train_sft.py` and `train_grpo.py` accept `--config path/to.json` for full config override, or individual CLI flags for common hyperparameters.
 
 ## Output Paths
 
-- SFT checkpoints: `models/sft_lora/`
-- GRPO checkpoints: `models/grpo_checkpoints/`
-- Training metrics (CSV): `models/{sft_lora,grpo_checkpoints}/metrics/`
+- SFT checkpoints: `models/sft_qwen3_4b_{base,instruct}/`
+- GRPO checkpoints: `models/grpo_qwen3_4b_{base,instruct}_{fresh,sft}_v{3,4,5}/`
+- Training metrics (CSV): each checkpoint tree contains `metrics/`
 - Eval results: `models/eval_results/`
 
 ---

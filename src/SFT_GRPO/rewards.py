@@ -1,7 +1,7 @@
 """Reward functions for GRPO training.
 
 Three reward components:
-    1. R_acc  — Accuracy: ROUGE-L F1 between generated and reference summary
+    1. R_acc  - Accuracy: mean of ROUGE-1 F1 and ROUGE-L F1
     2. R_len  — Length adherence: how well word count matches prompt requirement
     3. R_sent — Sentence count adherence: how well sentence count matches requirement
 
@@ -75,7 +75,7 @@ def _is_degenerate(text: str) -> bool:
 
 
 # ==============================================================================
-# R_acc — Accuracy Reward (ROUGE-L F1)
+# R_acc - Accuracy Reward (ROUGE-1 + ROUGE-L F1)
 # ==============================================================================
 
 
@@ -366,7 +366,7 @@ def compute_all_rewards(
     w_len: float = 0.3,
     w_sent: float = 0.2,
 ) -> Dict[str, float]:
-    """Compute reward components and the weighted total.
+    """Compute reward components and the gated composite reward.
 
     Total uses multiplicative gating: R_acc acts as a gate so degenerate outputs
     (R_acc ≈ 0) cannot earn reward by satisfying length/sentence constraints alone.
@@ -381,7 +381,7 @@ def compute_all_rewards(
         reference: Gold reference summary.
         length_requirement: E.g. "khoảng 50 từ".
         sentence_requirement: Optional. E.g. "khoảng 2 câu". If None, skipped.
-        w_acc: Weight for accuracy reward (unused in gated formula, kept for API compat).
+        w_acc: Legacy API argument; accuracy is the multiplicative gate and is not linearly weighted.
         w_len: Constraint bonus weight for length.
         w_sent: Constraint bonus weight for sentence count.
 

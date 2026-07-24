@@ -1,5 +1,6 @@
 """
 SFT Batch Size Smoke Test
+# NOTE: legacy diagnostic script; its Qwen2.5 settings are not canonical.
 Mục đích: Verify production config (batch=4, grad_accum=4, seq=3072, bf16)
 chạy được trên H200 mà không OOM.
 """

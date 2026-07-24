@@ -13,7 +13,8 @@
 # GRPO Training — Qwen3-4B-Base & Qwen3-4B (Instruct)
 # ==============================================================================
 # Aligns the SFT-fine-tuned Qwen3-4B model with multi-objective RL:
-#   R_acc (ROUGE-L) + R_len (length adherence) + R_sent (sentence count)
+#   Reward components: R_acc (mean ROUGE-1/ROUGE-L F1), R_len, R_sent
+#   Final reward: R_acc * (1 + 0.3*R_len + 0.2*R_sent)
 #
 # Usage:
 #   qsub scripts/pbs/train_grpo_qwen3_4b.pbs                                    # base, auto-resume

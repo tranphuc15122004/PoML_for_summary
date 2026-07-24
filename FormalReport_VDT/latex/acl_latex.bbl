@@ -1,11 +1,11 @@
-\begin{thebibliography}{22}
+\begin{thebibliography}{20}
 \providecommand{\natexlab}[1]{#1}
 
 \bibitem[{Amodei et~al.(2016)Amodei, Olah, Steinhardt, Christiano, Schulman,
   and Man{\'e}}]{amodei2016concrete}
 Dario Amodei, Chris Olah, Jacob Steinhardt, Paul Christiano, John Schulman, and
   Dan Man{\'e}. 2016.
-\newblock \href {https://arxiv.org/abs/1606.06565} {Concrete problems in ai
+\newblock \href {https://arxiv.org/abs/1606.06565} {Concrete problems in {AI}
   safety}.
 \newblock \emph{arXiv preprint arXiv:1606.06565}.
 
@@ -13,87 +13,111 @@ Dario Amodei, Chris Olah, Jacob Steinhardt, Paul Christiano, John Schulman, and
   Gurevych}]{bohm2019betterrewards}
 Florian B{\"o}hm, Yang Gao, Christian~M. Meyer, Ori Shapira, Ido Dagan, and
   Iryna Gurevych. 2019.
-\newblock \href {https://arxiv.org/abs/1909.01214} {Better rewards yield better
-  summaries: Learning to summarise without references}.
-\newblock \emph{arXiv preprint arXiv:1909.01214}.
+\newblock \href {https://doi.org/10.18653/v1/D19-1307} {Better rewards yield
+  better summaries: Learning to summarise without references}.
+\newblock In \emph{Proceedings of the 2019 Conference on Empirical Methods in
+  Natural Language Processing and the 9th International Joint Conference on
+  Natural Language Processing (EMNLP-IJCNLP)}, pages 3110--3120, Hong Kong,
+  China. Association for Computational Linguistics.
 
 \bibitem[{Chan et~al.(2021)Chan, Wang, and King}]{chan2021cmdp}
 Hou~Pong Chan, Lu~Wang, and Irwin King. 2021.
-\newblock \href {https://arxiv.org/abs/2108.03405} {Controllable summarization
-  with constrained markov decision process}.
-\newblock \emph{arXiv preprint arXiv:2108.03405}.
+\newblock \href {https://doi.org/10.1162/tacl_a_00423} {Controllable
+  summarization with constrained {Markov} decision process}.
+\newblock \emph{Transactions of the Association for Computational Linguistics},
+  9:1213--1232.
 
 \bibitem[{Fan et~al.(2018)Fan, Grangier, and Auli}]{fan2018controllable}
 Angela Fan, David Grangier, and Michael Auli. 2018.
-\newblock \href {https://arxiv.org/abs/1711.05217} {Controllable abstractive
-  summarization}.
-\newblock \emph{arXiv preprint arXiv:1711.05217}.
+\newblock \href {https://doi.org/10.18653/v1/W18-2706} {Controllable
+  abstractive summarization}.
+\newblock In \emph{Proceedings of the 2nd Workshop on Neural Machine
+  Translation and Generation}, pages 45--54, Melbourne, Australia. Association
+  for Computational Linguistics.
 
-\bibitem[{Gao et~al.(2022)Gao, Schulman, and Hilton}]{gao2022scaling}
-Leo Gao, John Schulman, and Jacob Hilton. 2022.
-\newblock \href {https://arxiv.org/abs/2210.10760} {Scaling laws for reward
-  model overoptimization}.
-\newblock \emph{arXiv preprint arXiv:2210.10760}.
+\bibitem[{Gao et~al.(2023)Gao, Schulman, and Hilton}]{gao2022scaling}
+Leo Gao, John Schulman, and Jacob Hilton. 2023.
+\newblock \href {https://proceedings.mlr.press/v202/gao23h.html} {Scaling laws
+  for reward model overoptimization}.
+\newblock In \emph{Proceedings of the 40th International Conference on Machine
+  Learning}, volume 202 of \emph{Proceedings of Machine Learning Research},
+  pages 10835--10866. PMLR.
 
-\bibitem[{He et~al.(2020)He, Kry{\'s}ci{\'n}ski, McCann, Rajani, and
+\bibitem[{He et~al.(2022)He, Kryscinski, McCann, Rajani, and
   Xiong}]{he2020ctrlsum}
-Junxian He, Wojciech Kry{\'s}ci{\'n}ski, Bryan McCann, Nazneen Rajani, and
-  Caiming Xiong. 2020.
-\newblock \href {https://arxiv.org/abs/2012.04281} {Ctrlsum: Towards generic
-  controllable text summarization}.
-\newblock \emph{arXiv preprint arXiv:2012.04281}.
+Junxian He, Wojciech Kryscinski, Bryan McCann, Nazneen Rajani, and Caiming
+  Xiong. 2022.
+\newblock \href {https://doi.org/10.18653/v1/2022.emnlp-main.396} {{CTRLsum}:
+  Towards generic controllable text summarization}.
+\newblock In \emph{Proceedings of the 2022 Conference on Empirical Methods in
+  Natural Language Processing}, pages 5879--5915, Abu Dhabi, United Arab
+  Emirates. Association for Computational Linguistics.
 
-\bibitem[{Hu et~al.(2021)Hu, Shen, Wallis, Allen-Zhu, Li, Wang, and
+\bibitem[{Hu et~al.(2022)Hu, Shen, Wallis, Allen-Zhu, Li, Wang, Wang, and
   Chen}]{hu2021lora}
 Edward~J. Hu, Yelong Shen, Phillip Wallis, Zeyuan Allen-Zhu, Yuanzhi Li, Shean
-  Wang, and Weizhu Chen. 2021.
-\newblock \href {https://arxiv.org/abs/2106.09685} {Lora: Low-rank adaptation
-  of large language models}.
-\newblock \emph{arXiv preprint arXiv:2106.09685}.
+  Wang, Lu~Wang, and Weizhu Chen. 2022.
+\newblock \href {https://openreview.net/forum?id=nZeVKeeFYf9} {{LoRA}: Low-rank
+  adaptation of large language models}.
+\newblock In \emph{International Conference on Learning Representations}.
 
 \bibitem[{Jie et~al.(2024)Jie, Meng, Shang, Jiang, and
   Liu}]{jie2024lengthcontrol}
 Renlong Jie, Xiaojun Meng, Lifeng Shang, Xin Jiang, and Qun Liu. 2024.
-\newblock \href {https://arxiv.org/abs/2406.10278} {Prompt-based length
-  controlled generation with multiple control types}.
-\newblock \emph{arXiv preprint arXiv:2406.10278}.
+\newblock \href {https://doi.org/10.18653/v1/2024.findings-acl.63}
+  {Prompt-based length controlled generation with multiple control types}.
+\newblock In \emph{Findings of the Association for Computational Linguistics:
+  ACL 2024}, pages 1067--1085, Bangkok, Thailand. Association for Computational
+  Linguistics.
 
-\bibitem[{Juseon-Do et~al.(2024)Juseon-Do, Kwon, Kamigaito, and
+\bibitem[{{Juseon-Do} et~al.(2024){Juseon-Do}, Kwon, Kamigaito, and
   Okumura}]{instructcmp2024}
-Juseon-Do, Jingun Kwon, Hidetaka Kamigaito, and Manabu Okumura. 2024.
-\newblock \href {https://arxiv.org/abs/2406.11097} {Instructcmp: Length control
-  in sentence compression through instruction-based large language models}.
-\newblock \emph{arXiv preprint arXiv:2406.11097}.
+{Juseon-Do}, Jingun Kwon, Hidetaka Kamigaito, and Manabu Okumura. 2024.
+\newblock \href {https://doi.org/10.18653/v1/2024.findings-acl.532}
+  {{InstructCMP}: Length control in sentence compression through
+  instruction-based large language models}.
+\newblock In \emph{Findings of the Association for Computational Linguistics:
+  ACL 2024}, pages 8980--8996, Bangkok, Thailand. Association for Computational
+  Linguistics.
 
 \bibitem[{Kikuchi et~al.(2016)Kikuchi, Neubig, Sasano, Takamura, and
   Okumura}]{kikuchi2016controlling}
 Yuta Kikuchi, Graham Neubig, Ryohei Sasano, Hiroya Takamura, and Manabu
   Okumura. 2016.
-\newblock \href {https://arxiv.org/abs/1609.09552} {Controlling output length
-  in neural encoder-decoders}.
-\newblock \emph{arXiv preprint arXiv:1609.09552}.
+\newblock \href {https://doi.org/10.18653/v1/D16-1140} {Controlling output
+  length in neural encoder-decoders}.
+\newblock In \emph{Proceedings of the 2016 Conference on Empirical Methods in
+  Natural Language Processing}, pages 1328--1338, Austin, Texas. Association
+  for Computational Linguistics.
 
 \bibitem[{Ladhak et~al.(2020)Ladhak, Durmus, Cardie, and
   McKeown}]{ladhak2020wikilingua}
 Faisal Ladhak, Esin Durmus, Claire Cardie, and Kathleen McKeown. 2020.
-\newblock \href {https://arxiv.org/abs/2010.03093} {Wikilingua: A new benchmark
-  dataset for cross-lingual abstractive summarization}.
-\newblock \emph{arXiv preprint arXiv:2010.03093}.
+\newblock \href {https://doi.org/10.18653/v1/2020.findings-emnlp.360}
+  {{WikiLingua}: A new benchmark dataset for cross-lingual abstractive
+  summarization}.
+\newblock In \emph{Findings of the Association for Computational Linguistics:
+  EMNLP 2020}, pages 4034--4048, Online. Association for Computational
+  Linguistics.
 
 \bibitem[{Lam et~al.(2023)Lam, Doan, Pham, and Kalita}]{lam2023viesum}
-Khang~Nhut Lam, Thieu~Gia Doan, Khang~Thua Pham, and Jugal Kalita. 2023.
-\newblock \href {https://arxiv.org/abs/2305.13696} {Abstractive text
-  summarization using the brio training paradigm}.
-\newblock \emph{arXiv preprint arXiv:2305.13696}.
+Khang Lam, Thieu Doan, Khang Pham, and Jugal Kalita. 2023.
+\newblock \href {https://doi.org/10.18653/v1/2023.findings-acl.7} {Abstractive
+  text summarization using the {BRIO} training paradigm}.
+\newblock In \emph{Findings of the Association for Computational Linguistics:
+  ACL 2023}, pages 92--99, Toronto, Canada. Association for Computational
+  Linguistics.
 
-\bibitem[{Liu et~al.(2023)Liu, Fabbri, Chen, Zhao, Han, Joty, Liu, Radev, Wu,
+\bibitem[{Liu et~al.(2024)Liu, Fabbri, Chen, Zhao, Han, Joty, Liu, Radev, Wu,
   and Cohan}]{liu2023instrusum}
-Yixin Liu, Alexander~R. Fabbri, Jiawen Chen, Yilun Zhao, Simeng Han, Shafiq
-  Joty, Pengfei Liu, Dragomir Radev, Chien-Sheng Wu, and Arman Cohan. 2023.
-\newblock \href {https://arxiv.org/abs/2311.09184} {Benchmarking generation and
-  evaluation capabilities of large language models for instruction controllable
-  summarization}.
-\newblock \emph{arXiv preprint arXiv:2311.09184}.
+Yixin Liu, Alexander Fabbri, Jiawen Chen, Yilun Zhao, Simeng Han, Shafiq Joty,
+  Pengfei Liu, Dragomir Radev, Chien-Sheng Wu, and Arman Cohan. 2024.
+\newblock \href {https://doi.org/10.18653/v1/2024.findings-naacl.280}
+  {Benchmarking generation and evaluation capabilities of large language models
+  for instruction controllable summarization}.
+\newblock In \emph{Findings of the Association for Computational Linguistics:
+  NAACL 2024}, pages 4481--4501, Mexico City, Mexico. Association for
+  Computational Linguistics.
 
 \bibitem[{Miculicich et~al.(2023)Miculicich, Xie, Wang, and
   He}]{miculicich2023precise}
@@ -106,61 +130,54 @@ Lesly Miculicich, Yujia Xie, Song Wang, and Pengcheng He. 2023.
   Nguyen}]{nguyen2019vnds}
 Van-Hau Nguyen, Thanh-Chinh Nguyen, Minh-Tien Nguyen, and Xuan~Hoai Nguyen.
   2019.
-\newblock \href {https://doi.org/10.1109/NICS48868.2019.9023886} {{VNDS}: {A}
-  {V}ietnamese {D}ataset for {S}ummarization}.
+\newblock \href {https://doi.org/10.1109/NICS48868.2019.9023886} {{VNDS}: A
+  vietnamese dataset for summarization}.
 \newblock In \emph{2019 6th NAFOSTED Conference on Information and Computer
-  Science (NICS)}, pages 375--380.
+  Science (NICS)}, pages 375--380. IEEE.
 
 \bibitem[{Phan et~al.(2022)Phan, Tran, Nguyen, and Trinh}]{phan2022vit5}
 Long Phan, Hieu Tran, Hieu Nguyen, and Trieu~H. Trinh. 2022.
-\newblock \href {https://arxiv.org/abs/2205.06457} {Vit5: Pretrained
-  text-to-text transformer for vietnamese language generation}.
-\newblock \emph{arXiv preprint arXiv:2205.06457}.
+\newblock \href {https://doi.org/10.18653/v1/2022.naacl-srw.18} {{ViT5}:
+  Pretrained text-to-text transformer for vietnamese language generation}.
+\newblock In \emph{Proceedings of the 2022 Conference of the North American
+  Chapter of the Association for Computational Linguistics: Human Language
+  Technologies: Student Research Workshop}, pages 136--142, Hybrid: Seattle,
+  Washington + Online. Association for Computational Linguistics.
 
-\bibitem[{Shao et~al.(2024)Shao, Wang, Zhu, Xu, Song, Bi, Zhang, Zhang, Li, Wu
-  et~al.}]{shao2024deepseekmath}
+\bibitem[{Shao et~al.(2024)Shao, Wang, Zhu, Xu, Song, Bi, Zhang, Zhang, Li, Wu,
+  and Guo}]{shao2024deepseekmath}
 Zhihong Shao, Peiyi Wang, Qihao Zhu, Runxin Xu, Junxiao Song, Xiao Bi, Haowei
-  Zhang, Mingchuan Zhang, Y.~K. Li, Y.~Wu, et~al. 2024.
-\newblock \href {https://arxiv.org/abs/2402.03300} {Deepseekmath: Pushing the
+  Zhang, Mingchuan Zhang, Y.~K. Li, Y.~Wu, and Daya Guo. 2024.
+\newblock \href {https://arxiv.org/abs/2402.03300} {{DeepSeekMath}: Pushing the
   limits of mathematical reasoning in open language models}.
 \newblock \emph{arXiv preprint arXiv:2402.03300}.
 
 \bibitem[{Skalse et~al.(2022)Skalse, Howe, Krasheninnikov, and
   Krueger}]{skalse2022rewardhacking}
-Joar Skalse, Nikolaus H.~R. Howe, Dmitrii Krasheninnikov, and David Krueger.
-  2022.
-\newblock \href {https://arxiv.org/abs/2209.13085} {Defining and characterizing
-  reward hacking}.
-\newblock \emph{arXiv preprint arXiv:2209.13085}.
+Joar Skalse, Nikolaus Howe, Dmitrii Krasheninnikov, and David Krueger. 2022.
+\newblock \href
+  {https://proceedings.neurips.cc/paper_files/paper/2022/hash/3d719fee332caa23d5038b8a90e81796-Abstract-Conference.html}
+  {Defining and characterizing reward gaming}.
+\newblock In \emph{Advances in Neural Information Processing Systems},
+  volume~35, pages 9460--9471. Curran Associates, Inc.
 
 \bibitem[{Stiennon et~al.(2020)Stiennon, Ouyang, Wu, Ziegler, Lowe, Voss,
   Radford, Amodei, and Christiano}]{stiennon2020summarize}
-Nisan Stiennon, Long Ouyang, Jeff Wu, Daniel~M. Ziegler, Ryan Lowe, Chelsea
-  Voss, Alec Radford, Dario Amodei, and Paul Christiano. 2020.
-\newblock \href {https://arxiv.org/abs/2009.01325} {Learning to summarize from
-  human feedback}.
-\newblock \emph{arXiv preprint arXiv:2009.01325}.
+Nisan Stiennon, Long Ouyang, Jeffrey Wu, Daniel Ziegler, Ryan Lowe, Chelsea
+  Voss, Alec Radford, Dario Amodei, and Paul~F. Christiano. 2020.
+\newblock \href
+  {https://proceedings.neurips.cc/paper/2020/hash/1f89885d556929e98d3ef9b86448f951-Abstract.html}
+  {Learning to summarize with human feedback}.
+\newblock In \emph{Advances in Neural Information Processing Systems},
+  volume~33, pages 3008--3021. Curran Associates, Inc.
 
 \bibitem[{Takase and Okazaki(2019)}]{takase2019positional}
 Sho Takase and Naoaki Okazaki. 2019.
-\newblock \href {https://arxiv.org/abs/1904.07418} {Positional encoding to
+\newblock \href {https://doi.org/10.18653/v1/N19-1401} {Positional encoding to
   control output sequence length}.
-\newblock \emph{arXiv preprint arXiv:1904.07418}.
-
-\bibitem[{Tran et~al.(2023)Tran, Le, Can, and Nguyen}]{tran2023abmusu}
-Mai-Vu Tran, Hoang-Quynh Le, Duy-Cat Can, and Quoc-An Nguyen. 2023.
-\newblock \href {https://arxiv.org/abs/2311.15525} {Overview of the vlsp 2022
-  -- abmusu shared task: A data challenge for vietnamese abstractive
-  multi-document summarization}.
-\newblock \emph{arXiv preprint arXiv:2311.15525}.
-
-\bibitem[{Tran et~al.(2020)Tran, Nghiem, Nguyen, Nguyen, Chi, and
-  Dinh}]{tran2020vims}
-Nhi-Thao Tran, Minh-Quoc Nghiem, Nhung~TH Nguyen, Ngan Luu-Thuy Nguyen, Nam~Van
-  Chi, and Dien Dinh. 2020.
-\newblock \href {https://link.springer.com/article/10.1007/s10579-020-09495-4}
-  {{V}i{M}s: a high-quality {V}ietnamese dataset for abstractive multi-document
-  summarization}.
-\newblock \emph{Language Resources and Evaluation}, 54(4):893--920.
+\newblock In \emph{Proceedings of the 2019 Conference of the North American
+  Chapter of the Association for Computational Linguistics: Human Language
+  Technologies, Volume 1 (Long and Short Papers)}, pages 3999--4004,
+  Minneapolis, Minnesota. Association for Computational Linguistics.
 
 \end{thebibliography}

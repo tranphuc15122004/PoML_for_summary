@@ -5,8 +5,8 @@
 #PBS -l walltime=12:00:00
 #PBS -P li96
 #PBS -l storage=scratch/jp09+scratch/li96+gdata/hn98
-#PBS -o /scratch/jp09/dd9648/PoML_for_summary/logs/eval_%j.out
-#PBS -e /scratch/jp09/dd9648/PoML_for_summary/logs/eval_%j.err
+#PBS -o /scratch/jp09/dd9648/PoML_for_summary/logs/eval_nci.out
+#PBS -e /scratch/jp09/dd9648/PoML_for_summary/logs/eval_nci.err
 #PBS -j oe
 
 # ==============================================================================
@@ -37,6 +37,12 @@ LOGS_DIR="${PROJECT_ROOT}/logs"
 QUICK="${QUICK:-0}"          # 1 = 20 samples, no BARTScore
 FAMILIES="${FAMILIES:-all}"  # see header for valid values
 MODEL_PATHS="${MODEL_PATHS:-}" # explicit "name=path,..." overrides auto-discovery
+TEST_DATA="${TEST_DATA:-data/test.jsonl}"
+TOP_P="${TOP_P:-0.9}"
+SEED="${SEED:-}"
+DETERMINISTIC="${DETERMINISTIC:-0}" # 1 = greedy decoding; 0 = legacy sampling
+BART_SCORE="${BART_SCORE:-true}"
+OUTPUT_DIR="${OUTPUT_DIR:-models/eval_results}"
 
 mkdir -p "${LOGS_DIR}"
 cd "${PROJECT_ROOT}"
@@ -49,6 +55,12 @@ echo "GPU:       $(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)"
 echo "Quick:     ${QUICK}"
 echo "Families:  ${FAMILIES}"
 echo "Models:    ${MODEL_PATHS:-auto-discover}"
+echo "Test data: ${TEST_DATA}"
+echo "Decoding:  $([ "${DETERMINISTIC}" = "1" ] && echo greedy || echo sampling)"
+echo "Top-p:     ${TOP_P}"
+echo "BARTScore: ${BART_SCORE}"
+echo "Seed:      ${SEED:-unset}"
+echo "Output:    ${OUTPUT_DIR}"
 echo "Start:     $(date)"
 echo "=============================================================="
 
@@ -74,6 +86,15 @@ if [ -n "${FAMILIES}" ] && [ "${FAMILIES}" != "all" ]; then
 fi
 if [ -n "${MODEL_PATHS}" ]; then
     _ARGS="${_ARGS} --models ${MODEL_PATHS}"
+fi
+_ARGS="${_ARGS} --test_data ${TEST_DATA} --output_dir ${OUTPUT_DIR}"
+_ARGS="${_ARGS} --top_p ${TOP_P}"
+if [ -n "${SEED}" ]; then
+    _ARGS="${_ARGS} --seed ${SEED}"
+_ARGS="${_ARGS} --enable_bart_score ${BART_SCORE}"
+fi
+if [ "${DETERMINISTIC}" = "1" ]; then
+    _ARGS="${_ARGS} --deterministic"
 fi
 
 echo ">>> Starting evaluation..."

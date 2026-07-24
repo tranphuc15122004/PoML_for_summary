@@ -10,6 +10,7 @@
 #PBS -j oe
 #PBS -m n
 
+# NOTE: legacy debug pipeline; its synthetic style metadata is not part of the canonical report.
 # ==============================================================================
 # PoML for Summary - DEBUG FULL PIPELINE
 # ==============================================================================

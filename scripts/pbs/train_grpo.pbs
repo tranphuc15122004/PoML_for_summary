@@ -11,11 +11,11 @@
 
 # ==============================================================================
 # PoML for Summary — GRPO Training
+# NOTE: legacy GRPO launcher retained for historical runs; canonical runs use train_grpo_qwen3_4b.pbs.
 # ==============================================================================
 # Align SFT model using multi-objective RL:
-#   - R_acc  (ROUGE-L)
-#   - R_len  (word count adherence)
-#   - R_sent (sentence count adherence)
+#   Reward components: R_acc (mean ROUGE-1/ROUGE-L F1), R_len, R_sent
+#   Final reward: R_acc * (1 + 0.3*R_len + 0.2*R_sent)
 #
 # Usage:
 #   qsub scripts/pbs/train_grpo.pbs                              # default (H200)

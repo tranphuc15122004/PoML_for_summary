@@ -11,6 +11,7 @@
 
 # =============================================================================
 # Comprehensive Smoke Test — Qwen3-4B SFT + GRPO pipeline
+# NOTE: smoke test retained for compatibility; synthetic style fields are legacy and not used by the canonical data pipeline.
 # Tests exact production config, args, and code paths from the 4 PBS jobs.
 # Expected runtime: ~25-35 min on H200.
 # =============================================================================

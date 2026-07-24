@@ -80,6 +80,7 @@ class ModelConfig:
     """Model and quantization configuration."""
 
     model_name_or_path: str = "/g/data/hn98/dd9648/models/Qwen2.5-3B-Instruct"
+    # Legacy default retained for compatibility; canonical PBS runs override this with a Qwen3-4B path.
     """Local path to model weights (offline cluster — no HuggingFace downloads)."""
 
     load_in_4bit: bool = False
@@ -196,7 +197,7 @@ class SFTConfig:
     """First N WikiLingua val samples used for SFT val."""
 
     disable_thinking: bool = False
-    """Set True for Qwen3/Qwen3.5 models to suppress <think> blocks during SFT.
+    """Set True for Qwen3 models to suppress <think> blocks during SFT.
     Passed as enable_thinking=False to the tokenizer's apply_chat_template."""
 
     def __post_init__(self):
@@ -243,9 +244,9 @@ class GRPOConfig:
     """PPO-style clipping parameter."""
 
     beta: float = 0.15
-    """KL penalty coefficient. Higher value keeps policy closer to SFT reference.
-    0.04 was too low — KL exploded to 4.6+ causing policy collapse within 200 steps.
-    0.15 provides strong enough anchor while still allowing meaningful updates."""
+    """KL penalty coefficient. The canonical v4 and v5 experiments use
+    different values as part of configuration bundles: v4 uses 0.15 and v5
+    uses 0.04. Interpret beta together with the rest of the bundle."""
 
     # Training
     per_device_train_batch_size: int = 4
@@ -319,8 +320,9 @@ class GRPOConfig:
     summaries; TRL's GRPO trainer does not use it."""
 
     disable_thinking: bool = False
-    """Set True for Qwen3/Qwen3.5 models to suppress <think> blocks in rollouts.
+    """Set True for Qwen3 models to suppress <think> blocks in rollouts.
     Passed as enable_thinking=False to all apply_chat_template calls in GRPO."""
+    # The canonical PBS configuration overrides this default to True.
 
     def __post_init__(self):
         self.model = ModelConfig(**self.model) if isinstance(self.model, dict) else self.model
@@ -332,13 +334,13 @@ class GRPOConfig:
 
 @dataclass
 class EvalConfig:
-    """Configuration for evaluation."""
+    """Legacy convenience config; the active evaluator defines its own EvalConfig."""
 
     test_data_path: str = "data/test.jsonl"
 
     generation_max_new_tokens: int = 256
     generation_temperature: float = 0.3
-    """Lower temperature for deterministic eval generation."""
+    """Low-temperature evaluation sampling; not deterministic without a saved seed."""
 
     batch_size: int = 8
     """Generation batch size."""

@@ -10,6 +10,7 @@
 
 # Debug script: verify flash_attn 2.x works correctly on H200 with the PoML venv.
 # Runs a small forward + backward pass through Qwen2.5-3B with flash_attention_2.
+# NOTE: legacy debug script; the canonical current model family is Qwen3-4B.
 # Submit: qsub scripts/pbs/debug_flash_h200.pbs
 
 set -euo pipefail

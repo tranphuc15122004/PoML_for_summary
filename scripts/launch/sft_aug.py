@@ -1,5 +1,6 @@
 #!/usr/bin/env python
-"""Launch SFT — AUGMENTED data (length + style constraints, 3 variants/sample).
+"""Launch SFT on constraint-conditioned data (length and sentence count).
+# NOTE: convenience launcher retained for historical/auxiliary SFT runs; canonical paper runs use train_sft_qwen3_4b.pbs.
 
 Supports any model. Auto-derives output_dir and run_name from model name.
 

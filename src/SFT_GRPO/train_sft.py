@@ -2,7 +2,7 @@
 """
 SFT (Supervised Fine-Tuning) for Vietnamese text summarization.
 
-Trains Qwen2.5-3B-Instruct with QLoRA on length/style-augmented instruction data.
+Trains a Qwen3-4B family model with LoRA on instruction-conditioned Vietnamese summarization data.
 
 Usage:
     python src/SFT_GRPO/train_sft.py                         # train from scratch
@@ -96,8 +96,8 @@ def load_tokenizer(model_cfg: ModelConfig, disable_thinking: bool = False):
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     if tokenizer.chat_template is None:
-        logger.warning("No chat template found — using default Qwen2 format.")
-    # Qwen3/Qwen3.5 thinking mode: patch apply_chat_template to always disable
+        logger.warning("No chat template found - using the tokenizer fallback format.")
+    # Qwen3 thinking mode: patch apply_chat_template to disable when configured
     # <think> blocks. TRL's SFTTrainer calls this internally, so patching the
     # tokenizer is the only way to control it without forking TRL.
     if disable_thinking:
@@ -371,8 +371,8 @@ def train(cfg: SFTConfig, resume_from: Optional[str] = None):
         logger.info(line)
 
     # 3. Configure TRL SFT
-    # TRL ≥0.12 auto-detects "messages" column and applies chat template +
-    # assistant-only loss masking when dataset_text_field=None.
+    # TRL auto-detects the "messages" column and applies the chat template.
+    # With pinned TRL 0.13.0, assistant-only loss masking is not guaranteed.
     training_args = TRLSFTConfig(
         output_dir=cfg.output_dir,
         per_device_train_batch_size=cfg.per_device_train_batch_size,
@@ -475,6 +475,7 @@ if __name__ == "__main__":
     parser.add_argument("--resume", type=str, default=None, help="Resume from checkpoint")
     parser.add_argument("--data_root", type=str, default="VDT_Textsum")
     parser.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-3B-Instruct")
+    # Legacy default; canonical Qwen3 runs pass --model_name explicitly.
     parser.add_argument("--output_dir", type=str, default="models/sft_lora")
     parser.add_argument("--lr", type=float, default=5e-5)
     parser.add_argument("--epochs", type=float, default=1.0)

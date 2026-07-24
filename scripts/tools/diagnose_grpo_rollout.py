@@ -1,5 +1,7 @@
 #!/usr/bin/env python
-"""Diagnose why GRPO rollouts produce garbage (R_acc ≈ 0).
+"""Legacy diagnosis of historical GRPO rollout failures (R_acc ≈ 0).
+
+This script reproduces the historical penalty regime; it is not the canonical v5 rollout.
 
 Loads the raw base model, the SFT checkpoint, and a GRPO checkpoint, then
 generates on a few val prompts under three regimes to isolate the cause:
@@ -8,7 +10,7 @@ generates on a few val prompts under three regimes to isolate the cause:
                      → what evaluate.py does. Shows the model's "true" quality.
   B. rollout-replica: model.train() (LoRA dropout ON), use_cache=False,
                      do_sample=True T=0.7 top_p=0.9, repetition_penalty=1.3,
-                     no_repeat_ngram_size=3 → exactly what train_grpo.py rollout does.
+                     no_repeat_ngram_size=3 → what the historical train_grpo.py rollout did.
   C. rollout-eval  : model.eval(), use_cache=True, same sampling + penalties as B
                      → isolates the train-mode/dropout effect from the penalties.
 

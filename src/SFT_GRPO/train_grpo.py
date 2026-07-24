@@ -2,9 +2,9 @@
 """
 GRPO (Group Relative Policy Optimization) for Vietnamese summarization.
 
-Optimizes the SFT model using multi-objective rewards:
-    - Accuracy (ROUGE-L F1)
-    - Length adherence
+Optimizes a Qwen3-4B family model using a gated multi-objective reward:
+    - Content accuracy (mean ROUGE-1 and ROUGE-L F1)
+    - Length and sentence-count adherence
 
 Usage:
     python src/SFT_GRPO/train_grpo.py
@@ -264,11 +264,11 @@ def calibrate_grpo_batch_size(
 # ==============================================================================
 
 class GRPOTrainer:
-    """Custom GRPO training loop for QLoRA-based summarization.
+    """Custom GRPO training loop for LoRA-based summarization.
 
     Implements the GRPO algorithm:
         1. Rollout: sample K completions per prompt from π_θ
-        2. Reward: compute R_total = w_acc·R_acc + w_len·R_len
+        2. Reward: R_total = R_acc * (1 + w_len*R_len + w_sent*R_sent)
         3. Advantage: A = (R − μ_group) / σ_group
         4. Policy gradient: L = -min(ρ·A, clip(ρ)·A) + β·KL
     """
@@ -291,15 +291,15 @@ class GRPOTrainer:
         if self.tokenizer.padding_side != 'left':
             logger.info(f"Setting tokenizer.padding_side from '{self.tokenizer.padding_side}' to 'left'")
             self.tokenizer.padding_side = 'left'
-        # Qwen3/Qwen3.5: disable thinking mode to prevent <think> blocks in rollouts
+        # Qwen3: disable thinking mode to prevent <think> blocks in rollouts
         self._disable_thinking = cfg.disable_thinking
         if self._disable_thinking:
             logger.info("Thinking mode disabled for Qwen3-family model (GRPO rollouts).")
 
         # Load policy model (trainable) and reference model (frozen).
-        # The reference is the GRPO *initial policy* (base + SFT adapter), not the raw
-        # base model, so the KL term anchors to the SFT start point rather than dragging
-        # the policy back toward base (which caused initial KL of 66–86).
+        # For canonical SFT-initialized runs, KL is anchored to base + SFT,
+        # not the raw base model. Fresh runs use the base model as reference.
+        # A resumed GRPO checkpoint is used as the reference for that continuation.
         self.policy_model = self._load_policy_model(resume_checkpoint=resume_from_checkpoint)
         self.ref_model = self._load_reference_model(init_adapter=resume_from_checkpoint)
 
@@ -457,13 +457,10 @@ class GRPOTrainer:
         return model
 
     def _load_reference_model(self, init_adapter: Optional[str] = None) -> AutoModelForCausalLM:
-        """Load the frozen reference model = the GRPO *initial policy*.
+        """Load the frozen reference model for the selected GRPO start point.
 
-        For SFT-warm-started runs the reference must be base+SFT (the policy's start
-        point), not the raw base model — otherwise the KL penalty pulls the policy away
-        from the SFT solution. When init_adapter points to a LoRA adapter dir, load it on
-        top of the base and merge so the reference sits exactly at the policy init. For
-        fresh runs (no adapter) the reference is the base model, which is correct.
+        Fresh uses the base model; canonical SFT-init uses base plus SFT.
+        A resumed GRPO checkpoint is used as the reference for that continuation.
         """
         model = self._load_quantized_model(self.cfg.model.model_name_or_path)
         if init_adapter and os.path.isdir(init_adapter):
@@ -1136,6 +1133,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="GRPO for Vietnamese summarization")
     parser.add_argument("--config", type=str, default=None, help="Path to JSON config")
     parser.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-3B-Instruct")
+    # Legacy default; canonical Qwen3 runs pass --model_name explicitly.
     parser.add_argument("--output_dir", type=str, default="models/grpo_checkpoints")
     parser.add_argument("--lr", type=float, default=5e-7)
     parser.add_argument("--num_generations", type=int, default=4)

@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 """Launch SFT training — tuned for H200 141GB VRAM + Flash Attention 2.
+# NOTE: legacy standalone launcher; canonical paper runs use train_sft_qwen3_4b.pbs.
 
 Key choices:
   - batch=20, grad_accum=1 → effective_batch=20, ~40-60 GB VRAM

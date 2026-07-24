@@ -1,16 +1,16 @@
 #!/usr/bin/env python
-"""Decoding-matrix experiment: isolate the exact cause of GRPO rollout garbage.
+"""Legacy decoding-matrix experiment: isolate the exact cause of GRPO rollout garbage.
 
 Loads the SFT checkpoint (the realistic GRPO start policy, LoRA UNMERGED so dropout
 layers exist) and generates on N val prompts under a matrix of decoding configs.
-Reports per-config mean R_acc + sample outputs so we can rank causes definitively
-and validate the proposed fix (TRL-style: no penalties, eval mode).
+Reports per-config mean R_acc for historical decoding settings; this is not the canonical v5 rollout.
+and validates the proposed fix (TRL-style: no penalties, eval mode).
 
 Configs (eval mode unless _TRAIN):
   1 greedy_nopen        greedy, no penalty                      → clean reference quality
   2 sample_nopen        T=0.7 top_p=0.9, no penalty             → TRL-style rollout = PROPOSED FIX
-  3 greedy_pen          greedy + rep=1.3 + no_repeat=3          → = sample_generations logging
-  4 sample_pen          T=0.7 + rep=1.3 + no_repeat=3           → = current rollout (single prompt)
+  3 greedy_pen          greedy + rep=1.3 + no_repeat=3          → = historical penalty probe
+  4 sample_pen          T=0.7 + rep=1.3 + no_repeat=3           → = historical rollout probe (single prompt)
   5 sample_rep11        T=0.7 + rep=1.1 only                    → mild penalty
   6 sample_nopen_TRAIN  T=0.7 no penalty, model.train()         → isolate LoRA-dropout alone
   7 rollout_replica     T=0.7 + rep=1.3 + no_repeat=3, TRAIN, BATCHED(left-pad) → full real rollout

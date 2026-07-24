@@ -9,7 +9,8 @@
 #PBS -j oe
 
 # ==============================================================================
-# SFT — Augmented data (length + style constraints, 3 variants per sample)
+# SFT - Constraint-conditioned data (length + sentence-count instructions; one sample per raw item)
+# NOTE: auxiliary SFT launcher; canonical paper runs use train_sft_qwen3_4b.pbs.
 # Supports any model via MODEL_PATH env var.
 # Submit: qsub scripts/pbs/train_sft_aug.pbs
 #        qsub -v MODEL_PATH=/path/to/model,EPOCHS=5 scripts/pbs/train_sft_aug.pbs

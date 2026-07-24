@@ -1,0 +1,84 @@
+{
+  "suite": "acl_standardized_external_v1",
+  "status": "historical_context_until_rerun",
+  "manifest": "data/test_clean_single_document.jsonl",
+  "decoding": {
+    "do_sample": false,
+    "max_new_tokens": 256,
+    "temperature": null,
+    "top_p": null
+  },
+  "scorer": {
+    "rouge": "src/evaluation/evaluate.py",
+    "length_and_sentence": "scripts/tools/analyze_acl_primary_eval.py",
+    "sentence_counter": "end punctuation after decimal stripping",
+    "normalization": "Unicode-NFKC, whitespace collapse, shared word counter"
+  },
+  "baselines": [
+    {
+      "label": "VietAI",
+      "model_id": null,
+      "revision": null,
+      "backend": "open_or_local",
+      "status": "pending_identity_preflight",
+      "historical_source": "VDT report"
+    },
+    {
+      "label": "GPT-4o",
+      "model_id": "gpt-4o",
+      "revision": null,
+      "backend": "openai_api",
+      "status": "pending_credentials_and_revision",
+      "historical_source": "VDT report"
+    },
+    {
+      "label": "GPT-3.5-Turbo",
+      "model_id": "gpt-3.5-turbo",
+      "revision": null,
+      "backend": "openai_api",
+      "status": "pending_credentials_and_revision",
+      "historical_source": "VDT report",
+      "note": "The report does not contain a GPT-3.3 baseline."
+    },
+    {
+      "label": "Qwen3-14B",
+      "model_id": null,
+      "revision": null,
+      "backend": "open_or_local",
+      "status": "pending_weights_preflight",
+      "historical_source": "VDT report"
+    },
+    {
+      "label": "Llama3.3-70B-Instruct",
+      "model_id": null,
+      "revision": null,
+      "backend": "open_or_local",
+      "status": "pending_weights_preflight",
+      "historical_source": "VDT report"
+    },
+    {
+      "label": "Phi-4-14B",
+      "model_id": null,
+      "revision": null,
+      "backend": "open_or_local",
+      "status": "pending_weights_preflight",
+      "historical_source": "VDT report"
+    },
+    {
+      "label": "Sailor-20B-chat",
+      "model_id": null,
+      "revision": null,
+      "backend": "open_or_local",
+      "status": "pending_weights_preflight",
+      "historical_source": "VDT report"
+    },
+    {
+      "label": "VinBigdata-7B",
+      "model_id": null,
+      "revision": null,
+      "backend": "open_or_local",
+      "status": "pending_identity_preflight",
+      "historical_source": "VDT report"
+    }
+  ]
+}

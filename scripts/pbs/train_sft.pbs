@@ -88,6 +88,7 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 export HF_DATASETS_CACHE="/scratch/jp09/dd9648/.cache/huggingface/datasets"
+# NOTE: legacy Qwen2.5 SFT launcher; canonical paper runs use train_sft_qwen3_4b.pbs.
 LOCAL_MODEL="/g/data/hn98/dd9648/models/Qwen2.5-3B-Instruct"
 mkdir -p "${HF_DATASETS_CACHE}"
 

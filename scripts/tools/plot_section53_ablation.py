@@ -80,7 +80,7 @@ def style_axis(ax, title, xticks, xlim, ylim, show_ylabel=False):
 
 
 def plot_panels(output_path):
-    # Data from Table 5 (Within-project Stage-wise Ablation).
+    # Data from the original single-document evaluation in VDT_report.tex.
     # ROUGE-2 is y, LenDist is x; the x-axis is inverted so the desirable region is top-right.
 
     # VietNews: [Pretrained, SFT, SFT+GRPO v5]
@@ -175,7 +175,7 @@ def plot_panels(output_path):
         [(8, 10, "left"), (10, -12, "left")],
         [color_fresh_base, color_fresh_inst],
     )
-    style_axis(ax1, "VietNews", [1, 2, 5, 10, 20, 50], (40, 0.9), (11.2, 30.8), show_ylabel=True)
+    style_axis(ax1, "VietNews", [1, 2, 5, 10, 20, 50], (40, 0.9), (10.5, 31.0), show_ylabel=True)
 
     # Panel 2: WikiLingua
     ax2.plot(
@@ -242,7 +242,7 @@ def plot_panels(output_path):
         [(8, 10, "left"), (10, -12, "left")],
         [color_fresh_base, color_fresh_inst],
     )
-    style_axis(ax2, "WikiLingua", [5, 10, 20, 50, 100], (75, 7.2), (2.0, 26.9))
+    style_axis(ax2, "WikiLingua", [5, 10, 20, 50, 100], (75, 7.2), (2.0, 27.5))
 
     handles, labels = ax1.get_legend_handles_labels()
     fig.legend(

@@ -1,5 +1,6 @@
 #!/bin/bash
 # ==============================================================================
+# NOTE: legacy local launcher with older defaults; canonical runs use the Qwen3-specific PBS scripts.
 # PoML for Summary - Local Training Script (no scheduler)
 # ==============================================================================
 # Usage:
