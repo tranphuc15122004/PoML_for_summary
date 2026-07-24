@@ -26,6 +26,7 @@
 \usepackage{tabularx}
 \usepackage{float}
 \usepackage{xcolor}
+
 \definecolor{promptbg}{gray}{0.92}
 \definecolor{rewardneutralbg}{HTML}{FAFAFA}
 \definecolor{rewardneutralframe}{HTML}{D0D0D0}
@@ -137,7 +138,7 @@ Table~\ref{tab:datasets} summarizes the two single-document test sets and their 
 \centering
 \caption{Single-document evaluation suite and validity boundary used in the original project evaluation.}
 \label{tab:datasets}
-\scriptsize
+\footnotesize
 \resizebox{\linewidth}{!}{%
 \begin{tabular}{L{0.19\linewidth}L{0.18\linewidth}L{0.11\linewidth}L{0.13\linewidth}L{0.27\linewidth}}
 \toprule
@@ -335,7 +336,7 @@ whereas \emph{SFT-initialized} GRPO warm-starts GRPO from the corresponding
 SFT checkpoint. Table~\ref{tab:grpo-nomenclature} formalizes the compact
 labels used throughout the remainder of the paper.
 
-\begin{table}[H]
+\begin{table}[t]
 \centering
 \caption{Compact nomenclature for the GRPO method variants used in the paper.
 Each label denotes a configuration bundle and, where applicable, a safeguard
@@ -575,7 +576,7 @@ Instruct SFT-init v5 & \best{27.65} & \second{15.85} & 1.42 & \best{0.45} & \bes
 Table~\ref{tab:reward-mitigation} reports the historical quantitative evidence.
 Base fresh shows the most dramatic recovery in that snapshot: degenerate rate collapses from $23.81\%$ to $0.32\%$ ($\approx 74\times$ reduction), $R_{\text{acc}}=0$ drops from $27.16\%$ to $1.94\%$, and ROUGE-2 rises from $10.58$ to $18.66$.
 Base SFT-init suffered severe length explosion under v3 ($\text{LenErr}=425\%$), which v5 cuts to $14.94\%$ while raising ROUGE-2 from $18.03$ to $26.38$.
-The Instruct branches were substantially more robust under v3---degenerate rates remained below $1\%$---owing to their chat-tuning prior; their v3-to-v5 gains are correspondingly incremental, with Instruct SFT-init v5 reaching the highest mean $R_{\text{acc}}$ ($0.4213$) and ROUGE-2 ($27.65$).
+The Instruct branches were substantially more robust under v3 (degenerate rates remained below $1\%$), owing to their chat-tuning prior; their v3-to-v5 gains are correspondingly incremental, with Instruct SFT-init v5 reaching the highest mean $R_{\text{acc}}$ ($0.4213$) and ROUGE-2 ($27.65$).
 Within that historical snapshot, the v5 safeguard package sharply reduces catastrophic failures for the Base branches and preserves the already-low Instruct degeneration rate. This is supporting evidence for the package, rather than a causal ablation of one detector or hyperparameter.
 
 \begin{figure*}[t]
@@ -587,13 +588,15 @@ Within that historical snapshot, the v5 safeguard package sharply reduces catast
 
 The historical comparison supports v5 as a stable canonical configuration for the main stage-wise evaluation.
 The Instruct branches' near-immunity to degeneration is consistent with the primary finding that an SFT warm-start or equivalent generative prior is useful for effective GRPO in this setting.
-The v3-to-v5 improvement is properly understood as the effect of a \textbf{mitigation package}---generation, detection, and formula-level safeguards acting jointly---rather than an ablation of any single component.
+The v3-to-v5 improvement is properly understood as the effect of a \textbf{mitigation package} (generation, detection, and formula-level safeguards acting jointly), rather than an ablation of any single component.
 Appendix~\ref{sec:appendix-sentence} retains the sentence-control results that justify keeping sentence reward as an explicit metric, and Appendix~\ref{sec:appendix-nosentence} shows that removing that term does not support a causal claim under the current evaluation protocol.
 
 \section{Conclusion}
 Controllable Vietnamese summarization is both a content-generation and alignment problem: the model must preserve salient information while obeying explicit length and sentence budgets. This paper studies that problem through a controlled Qwen3-4B post-training comparison.
 Across the primary VietNews and WikiLingua evaluation suite, SFT supplies the dominant content gain, SFT-initialized GRPO acts as a conditional refinement, and Fresh GRPO remains clearly weaker than warm-started GRPO. The strongest result is 29.62 ROUGE-2 on VietNews from Instruct SFT+GRPO v5; Base SFT+GRPO v5 reaches 28.97 on VietNews and mean length distances of 1.16 and 8.35 words on VietNews and WikiLingua.
 These conclusions are deliberately bounded to reference-conditioned Vietnamese single-document summarization under the stated original evaluation protocol. The study does not establish arbitrary-budget controllability, superiority over external models evaluated under different protocols, or a causal effect for any individual v3--v5 hyperparameter. The results also show that control gains are backbone- and domain-dependent: Instruct SFT already has strong length adherence, while Base benefits substantially from GRPO refinement.
+
+\bibliography{custom}
 
 \clearpage
 \appendix
@@ -748,7 +751,7 @@ Prompt examples are shown in Vietnamese Unicode and require XeLaTeX in this proj
 \centering
 \caption{Prompt-construction rules used by the pipeline}
 \label{tab:appendix-prompt-rules}
-\scriptsize
+\footnotesize
 \begin{tabular}{L{0.17\linewidth}L{0.20\linewidth}L{0.27\linewidth}L{0.22\linewidth}}
 \toprule
 Process & Prompt shape & Template policy & Stored outputs \\
@@ -971,7 +974,5 @@ Base SFT-init ablation & 0.0 & \best{26.85} & \best{17.21} & \best{73.65} & 1.45
 \bottomrule
 \end{tabular}
 \end{table}
-
-\bibliography{custom}
 
 \end{document}
